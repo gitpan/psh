@@ -8,7 +8,7 @@ use Carp;
 use Psh::OS;
 use Psh::Util;
 
-$VERSION = do { my @r = (q$Revision: 1.20 $ =~ /\d+/g); sprintf "%d."."%02d" x $#r, @r }; # must be all one line, for MakeMaker
+$VERSION = do { my @r = (q$Revision: 1.22 $ =~ /\d+/g); sprintf "%d."."%02d" x $#r, @r }; # must be all one line, for MakeMaker
 
 my %perlq_hash = qw|' ' " " q( ) qw( ) qq( )|;
 
@@ -179,7 +179,7 @@ sub decompose
 # (unmodified) line of psh input
 #
 
-sub std_tokenize 
+sub std_tokenize
 {
     my ($line,$pieces) = @_;
     return decompose(' ',$line,$pieces,1,undef,'\&');
@@ -356,6 +356,12 @@ sub make_tokens {
 				pop @tokens;
 				push @tokens, ['WORD','=>'];
 				$previous_token= '';
+			} elsif ($previous_token =~ /-$/) {
+				($tmp,$tmp)=@{pop @tokens};
+				$tmp=~s/-$//;
+				push @tokens, ['WORD',$tmp];
+				push @tokens, ['WORD','->'];
+				$previous_token= '';
 			} else {
 				my $file;
 				while( @parts>0) {
@@ -368,7 +374,7 @@ sub make_tokens {
 												$tmp,$Psh::bin);
 					return undef;
 				}
-				push @tokens, ['REDIRECT',$tmp,$handle,$file];
+				push @tokens, ['REDIRECT',$tmp,$handle,unquote($file)];
 				$previous_token='';
 			}
 		} elsif( $tmp eq '<') {
@@ -392,7 +398,7 @@ sub make_tokens {
 												$tmp,$Psh::bin);
 					return undef;
 				}
-				push @tokens, ['REDIRECT','<',0,$file];
+				push @tokens, ['REDIRECT','<',0,unquote($file)];
 				$previous_token='<';
 			}
 		} elsif( $tmp eq '&') {

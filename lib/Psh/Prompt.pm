@@ -2,9 +2,8 @@ package Psh::Prompt;
 
 use strict;
 use vars qw(%prompt_vars $VERSION);
-use Cwd;
 
-$VERSION = do { my @r = (q$Revision: 1.6 $ =~ /\d+/g); sprintf "%d."."%02d" x $#r, @r }; # must be all one line, for MakeMaker
+$VERSION = do { my @r = (q$Revision: 1.9 $ =~ /\d+/g); sprintf "%d."."%02d" x $#r, @r }; # must be all one line, for MakeMaker
 
 #
 # string prompt_string(TEMPLATE)
@@ -40,16 +39,18 @@ my $default_prompt = '\s% ';
 			return getlogin || (getpwuid($>))[0] || "uid$>";
 		},
 	'w' => sub { 
-			my $dir = cwd;
+			my $dir = $ENV{PWD};
 			my $home = Psh::OS::get_home_dir();
 			return $dir unless (length($home) > length($Psh::OS::FILE_SEPARATOR));	# in case the home dir is the root dir
-			$dir =~ s/^${home}/\~/ if $home;
+            $dir =~ s/\\/\\\\/g;
+			$dir =~ s/^\Q$home\E/\~/ if $home;
 			return $dir;
 		},
 	'W' => sub {
-			my $dir = cwd;
-			$dir =~ s/^.*\///;
-			return $dir||'/';
+			my $dir = $ENV{PWD};
+			$dir =~ s/\\/\\\\/g;
+			my ($newdir)= $dir=~ m:/([^/]+)$:;
+			return $newdir||$dir||'/';
 		},
 	'#' => sub { return $Psh::cmd; },
 	'$' => sub { return ($> ? '$' : '#'); },
@@ -72,14 +73,14 @@ sub prompt_helper {
 	} elsif($code =~ /^0x/) {
 		$sub= chr(hex($code));
 	} else {
-		print_warning_i18n('prompt_unknown_escape',$code,$Psh::bin);
+		Psh::Util::print_warning_i18n('prompt_unknown_escape',$code,$Psh::bin);
 		$sub = ''
 	}
 	
 	{
 		local $1;
 		if ($sub =~ m/\\([^\\])/) {
-			print_warning_i18n('prompt_expansion_error',$code,
+			Psh::Util::print_warning_i18n('prompt_expansion_error',$code,
 							   $1, $Psh::bin);
 			$sub =~ s/\\[^\\]//g;
 		}
@@ -99,7 +100,7 @@ sub prompt_string
 	if (ref($prompt_templ) eq 'CODE') { # If it is a subroutine,
 		$temp = &$prompt_templ();
 	} elsif (ref($prompt_templ)) {      # If it isn't a scalar
-		print_warning_i18n('prompt_wrong_type',$Psh::bin);
+		Psh::Util::print_warning_i18n('prompt_wrong_type',$Psh::bin);
 		$temp = $default_prompt;
 	} else {
 		$temp = $prompt_templ;
@@ -162,10 +163,7 @@ sub change_title {
 	$title= $ENV{PSH_TITLE} unless defined $title;
 	return if !$title;
 	$title= prompt_string($title);
-	my $term= $ENV{TERM};
-	if( $term=~ /^(rxvt.*)|(xterm.*)|(.*xterm)|(kterm)|(aixterm)|(dtterm)/) {
-		print "\017\033]2;$title\007";
-	}
+	Psh::OS::set_window_title($title);
 }
 
 1;

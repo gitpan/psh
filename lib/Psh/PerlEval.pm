@@ -80,16 +80,27 @@ sub variable_expansion
 
 	for $Psh::word (@{$Psh::arref}) {
 		if    ($Psh::word =~ m/^\'/) { push @Psh::retval, $Psh::word; }
-		elsif ($Psh::word =~ m/^\"/) { 
-			local $Psh::val = eval("$Psh::eval_preamble $Psh::word");
+		elsif ($Psh::word =~ m/^\"/) {
+			local $Psh::word2= $Psh::word;
+			$Psh::word2 =~ s/\\/\\\\/g;
+			local $Psh::val = eval("$Psh::eval_preamble $Psh::word2");
 
 			if ($@) { push @Psh::retval, $Psh::word; }
 			else    { push @Psh::retval, "\"$Psh::val\""; }
 		} else {
-			local $Psh::val = eval("$Psh::eval_preamble \"$Psh::word\"");
+			local $Psh::word2= $Psh::word;
+			$Psh::word2 =~ s/\\/\\\\/g;
+			local $Psh::val = eval("$Psh::eval_preamble \"$Psh::word2\"");
 
 			if ($@) { push @Psh::retval, $Psh::word; }
-			else    { push @Psh::retval, split(" ",$Psh::val); }
+			else    {
+				if ($]<5.005) {
+					# TODO: Skip backslashes
+					push @Psh::retval, split( /\s+/, $Psh::val);
+				} else {
+					push @Psh::retval, split(/(?<!\\)\s+/,$Psh::val);
+				}
+			}
 		}
 	}
 
@@ -98,7 +109,7 @@ sub variable_expansion
 
 use vars qw(@ISA @EXPORT @EXPORT_OK $VERSION);
 require Exporter;
-$VERSION = do { my @r = (q$Revision: 1.3 $ =~ /\d+/g); sprintf "%d."."%02d" x $#r, @r }; # must be all one line, for MakeMaker
+$VERSION = do { my @r = (q$Revision: 1.6 $ =~ /\d+/g); sprintf "%d."."%02d" x $#r, @r }; # must be all one line, for MakeMaker
 
 @ISA= qw(Exporter);
 

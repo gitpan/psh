@@ -3,12 +3,11 @@ package Psh::Completion;
 use strict;
 use vars qw($VERSION @bookmarks @user_completions $ac $complete_first_word_dirs);
 
-use Cwd qw(:DEFAULT chdir);
 use Psh::Util qw(:all starts_with ends_with);
 use Psh::OS;
 use Psh::PCompletion;
 
-$VERSION = do { my @r = (q$Revision: 1.34 $ =~ /\d+/g); sprintf "%d."."%02d" x $#r, @r }; # must be all one line, for MakeMaker
+$VERSION = do { my @r = (q$Revision: 1.38 $ =~ /\d+/g); sprintf "%d."."%02d" x $#r, @r }; # must be all one line, for MakeMaker
 
 my $APPEND="not_implemented";
 my $GNU=0;
@@ -33,7 +32,7 @@ sub init
 	}
 
 	# Wow, both ::Perl and ::Gnu understand it
-	my $word_break=" \\\n\t\"&{('`\$\%\@~<>=;|/";
+	my $word_break=" \\\n\t\"&{}('`\$\%\@~<>=;|/";
 	$attribs->{special_prefixes}= "\$\%\@\~\&";
 	$attribs->{word_break_characters}= $word_break;
 	$attribs->{completer_word_break_characters}= $word_break ;
@@ -89,6 +88,10 @@ sub cmpl_filenames
 	if ( $executable_only) {
 		@result= grep { -x $_ || -d $_ } @result;
 	}
+
+	# HACK: This won't help much if user tries to do another completion
+	# on the same item afterwards
+	@result= map { s/([ \'\"\´\`])/\\$1/g; $_ } @result unless $prepend eq '"';
 
 	if(@result==1) {
 		if( -d $result[0]) {
@@ -486,7 +489,7 @@ sub completion
 	return @tmp;
 }
 
-sub perl_symbol_display_match_list ($$$) {
+sub perl_symbol_display_match_list {
     my($matches, $num_matches, $max_length) = @_;
     map { $_ =~ s/^((\$#|[\@\$%&])?).*::(.+)/$3/; }(@{$matches});
     $Psh::term->display_match_list($matches);

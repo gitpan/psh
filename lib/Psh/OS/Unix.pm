@@ -2,7 +2,7 @@ package Psh::OS::Unix;
 
 use strict;
 use vars qw($VERSION);
-use POSIX qw(:sys_wait_h tcsetpgrp setpgid);
+use POSIX qw(:sys_wait_h tcsetpgrp setpgid getcwd);
 use Config;
 use File::Spec;
 use Sys::Hostname;
@@ -11,7 +11,7 @@ use User::pwent;
 
 use Psh::Util ':all';
 
-$VERSION = do { my @r = (q$Revision: 1.48 $ =~ /\d+/g); sprintf "%d."."%02d" x $#r, @r }; # must be all one line, for MakeMaker
+$VERSION = do { my @r = (q$Revision: 1.54 $ =~ /\d+/g); sprintf "%d."."%02d" x $#r, @r }; # must be all one line, for MakeMaker
 
 $Psh::OS::PATH_SEPARATOR=':';
 $Psh::OS::FILE_SEPARATOR='/';
@@ -19,12 +19,22 @@ $Psh::OS::FILE_SEPARATOR='/';
 $Psh::rc_file = ".pshrc";
 $Psh::history_file = ".psh_history";
 
+
+# Sets the title of the current window
+sub set_window_title {
+	my $title= shift;
+	my $term= $ENV{TERM};
+	if( $term=~ /^(rxvt.*)|(xterm.*)|(.*xterm)|(kterm)|(aixterm)|(dtterm)/) {
+		print "\017\033]2;$title\007";
+	}
+}
+
 #
 # Returns the hostname of the machine psh is running on, preferrably
 # the full version
 #
 
-sub get_hostname() {
+sub get_hostname {
 	return hostname;
 }
 
@@ -57,7 +67,7 @@ sub get_all_users {
 # void display_pod(text)
 #
 sub display_pod {
-	my $tmp= POSIX::tmpnam;
+	my $tmp= Psh::OS::tmpnam();
 	my $text= shift;
 
 	open( TMP,">$tmp");
@@ -71,18 +81,6 @@ sub display_pod {
 	print $text if $@;
 
 	unlink($tmp);
-}
-
-#
-# Exit psh - you won't believe it, but exit needs special treatment on
-# MacOS
-#
-sub exit {
-	Psh::Util::print_debug_class('i',"[Psh::OS::Unix::exit() called]\n");
-	Psh::save_history();
-	$ENV{SHELL} = $Psh::old_shell if $Psh::old_shell;
-	CORE::exit($_[0]) if $_[0];
-	CORE::exit(0);
 }
 
 sub get_home_dir {
@@ -349,6 +347,7 @@ sub execute_complex_command {
 
 sub _setup_redirects {
 	my $options= shift;
+	my $save= shift;
 
 	return [] if ref $options ne 'ARRAY';
 
@@ -359,7 +358,8 @@ sub _setup_redirects {
 			my $type= $option->[2];
 
 			if( $type==0) {
-				open(OLDIN,"<&STDIN");
+				open(OLDIN,"<&STDIN") if $save;
+				close(STDIN);
 				open(STDIN,$file);
 				select(STDIN);
 				$|=1;
@@ -368,17 +368,19 @@ sub _setup_redirects {
 					# Just to get rid of the warning
 				}
 			} elsif( $type==1) {
-				open(OLDOUT,">&STDOUT");
+				open(OLDOUT,">&OLDOUT") if $save;
+				close(STDOUT);
 				open(STDOUT,$file);
 				select(STDOUT);
 				$|=1;
 			} elsif( $type==2) {
-				open(OLDERR,">&STDERR");
+				open(OLDERR,">&OLDERR") if $save;
+				close(STDERR);
 				open(STDERR,$file);
 				select(STDERR);
 				$|=1;
 			}
-			push @cache, $type;
+			push @cache,$type if $save;
 		}
 	}
 	select(STDOUT);
@@ -392,15 +394,12 @@ sub _remove_redirects {
 		if( $type==0) {
 			close(STDIN);
 			open(STDIN,"<&OLDIN");
-			close(OLDIN);
 		} elsif( $type==1) {
 			close(STDOUT);
 			open(STDOUT,">&OLDOUT");
-			close(OLDOUT);
 		} elsif( $type==2) {
 			close(STDERR);
 			open(STDERR,">&OLDERR");
-			close(OLDERR);
 		}
 	}
 }
@@ -422,7 +421,8 @@ sub _fork_process {
 	# we do not fork, otherwise we'll never get
 	# the result value, changed variables etc.
 	if( $fgflag && !$forcefork && ref($code) eq 'CODE') {
-		my $cache= _setup_redirects($options);
+		local(*OLDIN,*OLDOUT,*OLDERR);
+		my $cache= _setup_redirects($options,1);
 		my @result= eval { &$code };
 		_remove_redirects($cache);
 		Psh::Util::print_error($@) if $@ && $@ !~/^SECRET/;
@@ -437,14 +437,14 @@ sub _fork_process {
 
 		$Psh::OS::Unix::forked_already=1;
 		close(READ) if( $pgrp_leader);
-		_setup_redirects($options);
+		_setup_redirects($options,0);
 		setpgid(0,$pgrp_leader||$$);
 		_give_terminal_to($pgrp_leader||$$) if $fgflag && !$termflag;
 		remove_signal_handlers();
 
 		if( ref($code) eq 'CODE') {
 			&{$code};
-			&exit(0);
+			CORE::exit(0);
 		} else {
 			{
 				if( ! ref $options) {
@@ -455,7 +455,7 @@ sub _fork_process {
 				}
 			} # Avoid unreachable warning
 			Psh::Util::print_error_i18n('exec_failed',$code);
-			&exit(-1);
+			CORE::exit(-1);
 		}
 	}
 	setpgid($pid,$pgrp_leader||$pid);
@@ -515,9 +515,31 @@ sub restart_job
 	}
 }
 
+sub resume_job {
+	my $job= shift;
+
+	kill 'CONT', -$job->{pid};
+	kill 'CONT', -$job->{pgrp_leader} if $job->{pgrp_leader};
+}
+
 # Simply doing backtick eval - mainly for Prompt evaluation
 sub backtick {
-	return `@_`;
+	my $com=join ' ',@_;
+	local $^F=50;
+	pipe(READ,WRITE);
+	$|=1;
+	unless(my $pid=fork) {
+		close(READ);
+		open(STDOUT,">&WRITE");
+		Psh::evl($com);
+		CORE::exit;
+	}
+	close(WRITE);
+	my $result='';
+	while(<READ>) {
+		$result.=$_;
+	}
+	return $result;
 }
 
 ###################################################################
@@ -712,7 +734,9 @@ sub _resize_handler
 	$SIG{$sig} = \&_resize_handler;
 }
 
-
+sub getcwd_psh {
+	return POSIX::getcwd();
+}
 
 1;
 

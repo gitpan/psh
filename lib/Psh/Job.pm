@@ -5,7 +5,7 @@ use vars qw($VERSION);
 
 use Psh::OS;
 
-$VERSION = do { my @r = (q$Revision: 1.12 $ =~ /\d+/g); sprintf "%d."."%02d" x $#r, @r }; # must be all one line, for MakeMaker
+$VERSION = do { my @r = (q$Revision: 1.13 $ =~ /\d+/g); sprintf "%d."."%02d" x $#r, @r }; # must be all one line, for MakeMaker
 
 #
 # $job= new Psh::Job( pid, call);
@@ -14,12 +14,13 @@ $VERSION = do { my @r = (q$Revision: 1.12 $ =~ /\d+/g); sprintf "%d."."%02d" x $
 # call is the name of the executed command
 #
 sub new {
-	my ( $class, $pid, $call ) = @_;
+	my ( $class, $pid, $call, $assoc_obj ) = @_;
 	my $self = {};
 	bless $self, $class;
 	$self->{pid}=$pid;
 	$self->{call}=$call;
 	$self->{running}=1;
+	$self->{assoc_obj}=$assoc_obj;
 	return $self;
 }
 
@@ -32,8 +33,7 @@ sub continue {
 
 	# minus sign to wake up the whole group of the child:
 	if( Psh::OS::has_job_control()) {
-		kill 'CONT', -$self->{pid};
-		kill 'CONT', -$self->{pgrp_leader} if $self->{pgrp_leader};
+		Psh::OS::resume_job($self);
 	}
 	$self->{running}=1;
 }

@@ -1,7 +1,7 @@
 #
-#	$Id: PCompletion.pm,v 1.3 2000/04/13 11:48:02 warp Exp $
+#	$Id: PCompletion.pm,v 1.4 2001/01/05 11:59:12 gregor Exp $
 #
-#	Copyright (c) 2000 Hiroo Hayashi. All Rights Reserved.
+#	Copyright (c) 2000-2001 Hiroo Hayashi. All Rights Reserved.
 #
 #	This program is free software; you can redistribute it and/or
 #	modify it under the same terms as Perl itself.

@@ -10,6 +10,9 @@ use DirHandle;
 eval {
 	use Win32;
 	use Win32::TieRegistry 0.20;
+	use Win32::Process;
+	use Win32::Console;
+	use Win32::NetAdmin;
 };
 
 if ($@) {
@@ -17,7 +20,9 @@ if ($@) {
 	die "\n";
 }
 
-$VERSION = do { my @r = (q$Revision: 1.22 $ =~ /\d+/g); sprintf "%d."."%02d" x $#r, @r }; # must be all one line, for MakeMaker
+my $console= new Win32::Console();
+
+$VERSION = do { my @r = (q$Revision: 1.30 $ =~ /\d+/g); sprintf "%d."."%02d" x $#r, @r }; # must be all one line, for MakeMaker
 
 #
 # For documentation see Psh::OS::Unix
@@ -29,6 +34,19 @@ $Psh::OS::FILE_SEPARATOR='\\';
 $Psh::rc_file = "pshrc";
 $Psh::history_file = "psh_history";
 
+sub set_window_title {
+	my $title=shift;
+	$console->Title($title);
+}
+
+
+sub reinstall_resize_handler {
+	# actually we have no 'handlers' here but instead simply do it
+	my ($cols,$rows)=$console->Size();
+	$ENV{COLUMNS}=$cols;
+	$ENV{ROWS}=$rows;
+}
+
 sub get_hostname {
 	my $name_from_reg = $Registry->{"HKEY_LOCAL_MACHINE\\System\\CurrentControlSet\\Control\\ComputerName\\ComputerName\\ComputerName"};
 	return $name_from_reg if $name_from_reg;
@@ -38,25 +56,17 @@ sub get_hostname {
 sub get_known_hosts {
 	my $hosts_file = "$ENV{windir}\\HOSTS";
 	my $hfh = new FileHandle($hosts_file, 'r');
-	return qw("localhost") unless defined($hfh);
+	return "localhost" unless defined($hfh);
 	my $hosts_text = join('', <$hfh>);
 	$hfh->close();
 	return Psh::Util::parse_hosts_file($hosts_text);  
 }
 
-sub exit {
-	Psh::save_history();
-	$ENV{SHELL} = $Psh::old_shell if $Psh::old_shell;
-	CORE::exit(@_[0]) if $_[0];
-	CORE::exit(0);
-}
-
-
 #
 # void display_pod(text)
 #
 sub display_pod {
-	my $tmp= POSIX::tmpnam();
+	my $tmp= Psh::OS::tmpnam();
 	my $text= shift;
 
 	open( TMP,">$tmp");
@@ -82,8 +92,6 @@ sub inc_shlvl {
 	}
 }
 
-sub reap_children {1};
-
 sub execute_complex_command {
 	my @array= @{shift()};
 	my $fgflag= shift @array;
@@ -98,6 +106,7 @@ sub execute_complex_command {
 		return ();
 	}
 
+	my $obj;
 	for( my $i=0; $i<@array; $i++) {
 		my ($coderef, $how, $options, $words, $strat, $text)= @{$array[$i]};
 		my $line= join(' ',@$words);
@@ -105,73 +114,170 @@ sub execute_complex_command {
 		my @tmp;
 
 		if( defined($eval_thingie)) {
-			@tmp= fork_process($eval_thingie,$fgflag,$text);
+			($obj,@tmp)= _fork_process($eval_thingie,$fgflag,$text,undef,$words);
 		}
 		if( @return_val < 1 ||
 			!defined($return_val[0])) {
 			@return_val= @tmp;
 		}
+		$string=$text;
+	}
+	if ($obj) {
+		my $pid=$obj->GetProcessID();
+		my $job=$Psh::joblist->create_job($pid,$string,$obj);
+		if( $fgflag) {
+			_wait_for_system($obj, 1);
+		} else {
+			my $visindex= $Psh::joblist->get_job_number($pid);
+			Psh::Util::print_out("[$visindex] Background $pid $string\n");
+		}
 	}
 	return @return_val;
 }
 
-sub fork_process {
-	local( $Psh::code, $Psh::fgflag, $Psh::string) = @_;
+sub _fork_process {
+	local( $Psh::code, $Psh::fgflag, $Psh::string, $Psh::options,
+		   $Psh::words) = @_;
 	local $Psh::pid;
 
 	# TODO: perhaps we should use Win32::Process?
-	print_error_i18n('no_jobcontrol') unless $Psh::fgflag;
+	# hmm - won't help alot :-( - warp
+	# print_error_i18n('no_jobcontrol') unless $Psh::fgflag;
 
 	if( ref($Psh::code) eq 'CODE') {
-		return &{$Psh::code};
+		return (0,&{$Psh::code});
 	} else {
-		system($Psh::code);
+		if ($Psh::words) {
+			my $obj;
+			Win32::Process::Create($obj,
+								   @$Psh::words->[0],
+								   $Psh::string,
+								   0,
+								   NORMAL_PRIORITY_CLASS,
+								   ".");
+			return ($obj,0);
+			# We are passing around objects instead of pid because
+			# Win32::Process currently only allows me to create objects,
+			# not look them up via pid
+		} else {
+			return (0,system($Psh::code));
+		}
 	}
 }
 
+sub _wait_for_system {
+	my ($obj, $quiet)=@_;
+
+	return unless $obj;
+	$obj->Wait(INFINITE);
+	_handle_wait_status($obj,$quiet)
+}
+
+sub _handle_wait_status {
+	my ($obj,$quiet)=@_;
+
+	return '' unless $obj;
+	my $pid= $obj->GetProcessID();
+	my $job= $Psh::joblist->get_job($obj->GetProcessID());
+	my $command = $job->{call};
+	my $visindex= $Psh::joblist->get_job_number($pid);
+	my $verb='';
+
+	Psh::Util::print_out("[$visindex] \u$Psh::text{done} $pid $command\n") unless $quiet;
+	$Psh::joblist->delete_job($pid);
+	return '';
+}
+
+sub fork_process {
+	_fork_process(@_);
+	return undef;
+}
+
 sub get_all_users {
-	my @result = (".DEFAULT");
-	if (-d "$ENV{windir}\Profiles") {
-		my $Profiles = new DirHandle "$ENV{windir}\Profiles";
-		if (defined($Profiles)) {
-			while (defined(my ($Profile) = $Profiles->read())) {
-				if (-d $Profile) {
-					push (@result, $Profile);
-				}
-			}
-		}
-	}
+	my @result=();
+	Win32::NetAdmin::GetUsers("",FILTER_NORMAL_ACCOUNT,\@result);
+# does not work e.g. on Win2000
+#	my @result = (".DEFAULT");
+#  	if (-d "$ENV{windir}\Profiles") {
+#  		my $Profiles = new DirHandle "$ENV{windir}\Profiles";
+#  		if (defined($Profiles)) {
+#  			while (defined(my ($Profile) = $Profiles->read())) {
+#  				if (-d $Profile) {
+#  					push (@result, $Profile);
+#  				}
+#  			}
+#  		}
+#  	}
 	return @result;
 }
 
 
-sub has_job_control { return 0; }
-sub restart_job {1}
-sub remove_signal_handlers {1}
-sub setup_signal_handlers {1}
-sub setup_sigsegv_handler {1}
-sub setup_readline_handler {1}
-sub reinstall_resize_handler {1}
+sub has_job_control { return 1; }
+
+sub resume_job {
+	my $job= shift;
+	$job->{assoc_obj}->Resume();
+}
+
+#
+# void restart_job(bool FOREGROUND, int JOB_INDEX)
+#
+sub restart_job
+{
+	my ($fg_flag, $job_to_start) = @_;
+
+	my $job= $Psh::joblist->find_job($job_to_start);
+
+	if(defined($job)) {
+		my $pid = $job->{pid};
+		my $command = $job->{call};
+
+		if ($command) {
+			my $verb = "\u$Psh::text{restart}";
+			my $qRunning = $job->{running};
+			if ($fg_flag) {
+			  $verb = "\u$Psh::text{foreground}";
+			} elsif ($qRunning) {
+			  # bg request, and it's already running:
+			  return;
+			}
+			my $visindex = $Psh::joblist->get_job_number($pid);
+			Psh::Util::print_out("[$visindex] $verb $pid $command\n");
+
+			if($fg_flag) {
+				eval { _wait_for_system($job->{assoc_obj}, 0); };
+			} elsif( !$qRunning) {
+				$job->continue;
+			}
+		}
+	}
+}
 
 sub get_home_dir {
 	my $user= shift;
-	return $ENV{HOME} if( ! $user && $ENV{HOME} );
-	return "\\";
+	my $home;
+	if (!$user) {
+		$home=$ENV{HOME}||$ENV{USERPROFILE}||$ENV{HOMEDRIVE}.$ENV{HOMEPATH};
+	} else {
+		# There is a UserGetAttributes function in Win32::NetAdmin but
+		# it will only work if you're admin
+		# I'v searched my registry but did not find something usable
+	}
+	return $home||"\\";
 } # we really should return something (profile?)
 
 
 sub get_rc_files {
 	my @rc=();
 
-	if (-r '/etc/pshrc') {
-		push @rc, '/etc/pshrc';
-	}
+	push @rc, "\\etc\\pshrc" if -r "\\etc\\pshrc";
+	push @rc, "$ENV{WINDIR}\\pshrc" if -r "$ENV{WINDIR}\\pshrc";
 	my $home= Psh::OS::get_home_dir();
-	if ($home) { push @rc, File::Spec->catfile($home,$rc_file) };
+	if ($home) { push @rc, File::Spec->catfile($home,$Psh::rc_file) };
 	return @rc;
 }
 
-sub remove_readline_handler {1} #FIXME: better than not running at all
+sub remove_readline_handler {1}
 
 sub is_path_absolute {
 	my $path= shift;
@@ -182,9 +288,35 @@ sub is_path_absolute {
 
 sub get_path_extension {
 	my $extsep = $Psh::OS::PATH_SEPARATOR || ';';
-	my $pathext = $Registry->{"HKEY_LOCAL_MACHINE\\System\\CurrentControlSet\\Control\\Session Manager\\Environment\\PATHEXT"} || $ENV{PATHEXT} || ".cmd;.bat;.exe;.com";
+	my $pathext = $ENV{PATHEXT} || $Registry->{"HKEY_LOCAL_MACHINE\\System\\CurrentControlSet\\Control\\Session Manager\\Environment\\PATHEXT"} || ".cmd;.bat;.exe;.com"; # Environment has precedence over LOCAL_MACHINE registry
 	return split("$extsep",$pathext);
 }
+
+
+# Simply doing backtick eval - mainly for Prompt evaluation
+sub backtick {
+	return `@_`;
+}
+
+sub abs_path {
+	my $dir= shift;
+	if (defined &Win32::GetFullPathName) {
+		my $tmp= Win32::GetFullPathName($dir);
+		$tmp=~tr:\\:/:; # otherwise prompt code etc messes up
+		return $tmp;
+	}
+	undef;
+}
+
+sub getcwd_psh {
+	my $tmp;
+	if (defined &Win32::GetCwd) {
+		$tmp= Win32::GetCwd();
+		$tmp=~tr:\\:/:;
+	}
+	return $tmp||Psh::OS::fb_getcwd();
+}
+
 
 1;
 

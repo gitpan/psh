@@ -2,7 +2,6 @@ package Psh;
 
 use locale;
 use Config;
-use Cwd qw(:DEFAULT chdir);
 use FileHandle;
 use File::Spec;
 use File::Basename;
@@ -45,7 +44,7 @@ use vars qw($bin $cmd $echo $host $debugging
 			$history_file $save_history $history_length $joblist
 			$eval_preamble $currently_active $handle_segfaults
 			$result_array $which_regexp $ignore_die $old_shell
-		    $login_shell $change_title $window_title
+		    $login_shell $window_title
             $interactive
 			@val @wday @mon @strategies @unparsed_strategies @history
             @executable_noexpand
@@ -58,7 +57,7 @@ use constant LOCK_EX => 2; # exclusive lock (for writing)
 use constant LOCK_NB => 4; # non-blocking request (don't wait)
 use constant LOCK_UN => 8; # free the lock
 
-$VERSION = do { my @r = (q$Revision: 1.57 $ =~ /\d+/g); sprintf "%d."."%02d" x $#r, @r }; # must be all one line, for MakeMaker
+$VERSION = do { my @r = (q$Revision: 1.67 $ =~ /\d+/g); sprintf "%d."."%02d" x $#r, @r }; # must be all one line, for MakeMaker
 
 
 
@@ -133,6 +132,9 @@ my $input;
          }
          if( $built_ins{$fnname}) {
 			 eval 'use Psh::Builtins::'.ucfirst($fnname);
+			 if ($@) {
+				 Psh::Util::print_error_i18n('builtin_failed',$@);
+			 }
              return "(Psh::Builtins::".ucfirst($fnname)."::bi_$fnname)";
 		 }
 		 return '';
@@ -205,7 +207,7 @@ $strategy_eval{brace}= $strategy_eval{eval}= sub {
 
 	if( $_[3]) { # we are second or later in a pipe
 		my $code;
-		$todo=~ s/\}([qg])\s*$/\}/;
+		$todo=~ s/\} ?([qg])\s*$/\}/;
 		my $mods= $1 || '';
 		if( $mods eq 'q' ) { # non-print mode
 			$code='while(<STDIN>) { @_= split /\s+/; '.$todo.' ; }';
@@ -393,7 +395,7 @@ sub process
 			if ($control_d_max !~ /^\d$/) {
 				$control_d_max=10;
 			}
-			Psh::OS::exit() if ($control_d_counter>=$control_d_max);
+			Psh::OS::exit_psh() if ($control_d_counter>=$control_d_max);
 			next;
 		}
 		$control_d_counter=0;
@@ -625,17 +627,21 @@ sub iget
 	return undef unless defined $line;
 	chomp $line;
 
-	if ($line && $line !~ m/^\s*$/) {
-		if (!@history || $history[$#history] ne $line) {
-			$term->addhistory($line) if $term;
-			push(@history, $line);
-			if( @Psh::history>$Psh::history_length) {
-				splice(@Psh::history,0,-$Psh::history_length);
-			}
+    add_history($line);
+	return $line . "\n";         # This is expected by other code.
+}
+
+sub add_history
+{
+	my $line=shift;
+	return if !$line or $line =~ /^\s*$/;
+	if (!@history || $history[$#history] ne $line) {
+		$term->addhistory($line) if $term;
+		push(@history, $line);
+		if( @Psh::history>$Psh::history_length) {
+			splice(@Psh::history,0,-$Psh::history_length);
 		}
 	}
-
-	return $line . "\n";         # This is expected by other code.
 }
 
 sub save_history
@@ -693,7 +699,7 @@ sub minimal_initialize
 
 	$old_shell = $ENV{SHELL} if $ENV{SHELL};
 	$ENV{SHELL} = $0;
-	$ENV{PWD} = cwd;
+	$ENV{PWD} = Psh::OS::getcwd_psh();
 	$ENV{PSH_TITLE} = $bin;
 
 	Psh::OS::inc_shlvl();
@@ -737,11 +743,6 @@ sub finish_initialize
 
 	$save_history    = 1               if !defined($save_history);
 	$history_length  = $ENV{HISTSIZE} || 50 if !defined($history_length);
-	$change_title    = 1               if !defined($change_title);
-
-	if( $change_title) {
-		$ENV{PSH_TITLE}= cwd;
-	}
 
 	if (!defined($longhost)) {
 		$longhost                    = Psh::OS::get_hostname();
@@ -802,7 +803,7 @@ sub finish_initialize
 			print_debug_class('i',"[Term::Size not available. Trying Term::ReadKey\n]");
 			eval "use Term::ReadKey";
 			if( $@) {
-				print_debug_class('i',"[Term::ReadKey not available - no resize handling!]\n");
+				print_debug_class('i',"[Term::ReadKey not available]\n");
 			}
 		}
 		else    { print_debug_class('i',"[Using &Term::Size::chars().]\n"); }
