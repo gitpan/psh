@@ -1,24 +1,14 @@
-1999-11-08
+1999-12-13
 
-  * Figure out how to catch SIGINT (Control-C) and have it abandon the
-    input currently being constructed (which is managed by Term::ReadLine).
-
+  * When we say 'foo' at it, and there is no executable in the path,
+    and no perl function, psh really should complain at us.
 
 1999-11-01
-
-  * Create @psh::lang variable, which can be set thusly:
-
-        @psh::lang = qw(ESP, ENG);
-
-    for a user that wants Spanish localization where available, falling
-    back to English if necessary.
-
-  * Create localized versions of things like the list of days of the week,
-    and months of the year. use @psh::lang to decide which ones to use.
 
   * There is something called the XML Shell that is like an xterm, but
     uses XML for its display. Find out if there is anything that can
     be done in psh to make interaction via XML Shell especially nice.
+	(I lost the URL. Please patch this file if you find it...).
 
   * Along those same lines, create a mode whereby the shell intercepts
     all command output (rather than letting it stream to its own STDOUT)
@@ -98,7 +88,4 @@
   * Use this underlying support module to provide background jobs and pipelines
     from within this shell. Also, create simple shells similar to other shells
     using it (for testing and demonstration purposes).
-
-  * Intercept Control-C
-
 
