@@ -17,7 +17,7 @@ use Getopt::Std;
 
 use vars qw($VERSION %opt);
 
-$VERSION='0.006';
+$VERSION='0.008';
 
 #
 # Parse the command line and deal with the options except -r, which is
@@ -25,9 +25,14 @@ $VERSION='0.006';
 # file so that the results apply to all the setting up we do before the
 # MAIN program.
 #
+# option -i is ignored
 
-getopts('dwr:c:', \%opt);
+getopts('iwrd:f:c:', \%opt);
 
+if ($opt{'r'}) {
+	Psh::Util::print_error_i18n('no_r_flag');
+	exit 1;
+}
 
 #
 # -w is "warnings mode":
@@ -44,13 +49,13 @@ if ($opt{'w'}) {
 # -d is "debug mode":
 #
 
-if ($opt{'d'}) { $Psh::debugging = 1; }
-else           { $Psh::debugging = 0; }
+if (exists($opt{'d'})) { $Psh::debugging = $opt{'d'}||'soi'; }
+else                   { $Psh::debugging = 0; }
 
 Psh::Util::print_debug("Debugging!\n");
 
 Psh::minimal_initialize;
-Psh::process_rc($opt{'r'});
+Psh::process_rc($opt{'f'});
 Psh::finish_initialize;
 
 # TODO: Is this implementation equivalent to sh's ?
@@ -67,29 +72,6 @@ if (@ARGV) {
 		Psh::handle_message($@,'main_loop');
     }
 }
-
-END {	# try and write the history no matter how we exit
-	if ($Psh::save_history && !$Psh::readline_saves_history) {
-		my $fhist = new FileHandle($Psh::history_file, 'a');
-		if (defined($fhist)) {
-			eval { flock($fhist, LOCK_EX); };
-			if( @Psh::history>$Psh::history_length) {
-				splice(@Psh::history,0,@Psh::history-$Psh::history_length);
-			}
-			foreach (@Psh::history) {
-				$fhist->print("$_\n");
-			}
-			eval { flock($fhist, LOCK_UN); };
-			$fhist->close();
-		}
-	}
-}
-
-
-END {	# restore the old $ENV{SHELL}
-	$ENV{SHELL} = $Psh::old_shell if $Psh::old_shell;
-}
-
 
 exit 0;
 

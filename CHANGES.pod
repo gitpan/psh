@@ -4,6 +4,264 @@
 # A reverse-chronological order list of changes to the Perl Shell.
 #
 
+=head1 NAME
+
+Change log for B<psh> - The Perl SHell
+
+=head1 DESCRIPTION
+
+A reverse-chronological ordered list of changes
+
+=cut
+
+# This is so pod2man won't complain ;-)
+
+
+###############################################################################
+###############################################################################
+##
+## 0.008
+##
+###############################################################################
+###############################################################################
+
+=head1 0.008 [2000-04-30]
+
+=head2 New and Enhanced Built-ins
+
+=over 4
+
+=item B<cd> and B<dirs>
+
+The B<cd> builtin now has a (currently unlimited) history list, accessible
+using:
+
+  cd -/+/%number
+
+The new builtin B<dirs> displays the stack.
+
+=item B<complete>
+
+Adds a mightier and B<bash> compatible way to define custom completions.
+
+=item B<firsttime>
+
+A firsttime user setup utility for the F<.pshrc> file. It cannot do a lot
+currently but will grow in future.
+
+=item B<function>
+
+Tries to emulate B<bash>'s behaviour.
+
+=item B<history>
+
+=item B<unalias>
+
+Does not remove builtins of the same name anymore.
+
+=back
+
+
+=head2 New Features
+
+=over 4
+
+=item *
+
+Extended Completion code for Perl (supports C<$#foo>, C<$foo-E<gt>{key>,
+C<$foo-E<gt>method>, subroutine without C<&>, B<perl> reserved symbol)
+
+=item *
+
+Executable completion now even after initial C<!> for shell escape
+
+=item *
+
+Some minimal status code testing and error handling for user input.
+
+=item *
+
+Understands environment variable C<$IGNOREEOF>.
+
+=item *
+
+Accepts the B<-i> command line switch and ignores it for B<bash> compatibility.
+
+=item *
+
+If the line you entered matches the last line it won't be added to the history.
+
+=item *
+
+On Unix, support for a global F<.pshrc> file at F</etc/pshrc>.
+
+=item *
+
+New variable C<@Psh::executable_noexpand>.
+
+=item *
+
+New variable C<$Psh::interactive> which is set if B<psh> is currently in interactive
+mode.
+
+=back
+
+
+=head2 Bugs Fixed
+
+=over 4
+
+=item *
+
+Fixed some small problems with globbing code.
+
+=item *
+
+Fixed problem with B<pod2man> and F<CHANGES.pod> reported on Sourceforge.
+
+=item *
+
+C<SIGTERM> and C<SIGHUP> are not ignored anymore and cause B<psh> to exit instead.
+
+=item *
+
+Switch B<-r> now reserved for restricted mode, new switch B<-f> for alternative
+resource file.
+
+=item *
+
+Fixed problem with quoting which was not removed for the executable strategy.
+
+=item *
+
+Piping is now possible in aliases.
+
+=item *
+
+The parser now allows nesting aliases.
+
+=back
+
+=cut
+
+
+###############################################################################
+###############################################################################
+##
+## 0.007
+##
+###############################################################################
+###############################################################################
+
+
+=head1 0.007 [2000-02-14]
+
+Contributions primarily by Markus Peter (C<warp>) and Simon Huggins
+(C<huggie>).
+
+
+=head2 New Features
+
+=over 4
+
+=item *
+
+Support for window titles. New environment variable C<$PSH_TITLE>,
+C<$Psh::change_title>, C<$Psh::window_title>. The behavior is like prompt
+strings.
+
+=item *
+
+Strategy B<perlfunc> is a default strategy again. C<$Psh::perlfunc_builtins>
+determines wether Perl builtins should be C<eval>ed (default 0)
+
+=item *
+
+Builtin B<kill> now supports sending a signal to a named job (e.g. "C<emacs & ;
+kill emacs>").
+
+=item *
+
+Builtin B<strategy> for loading strategies on demand and adding them to
+the list of strategies to use. Handy for strategies that are used less often
+than the core strategies.
+
+=item *
+
+Properly pipeable aliases.
+
+=item *
+
+Fallback and most other builtins are loaded on demand.
+
+=item *
+
+Converted C<&Psh::symbols()> into a builtin, B<symbols>.
+
+=item *
+
+New builtin B<set>.  Acts like B<bash>'s B<set> and returns environment.  Could be
+extended to allow C<set -o noclobber> B<bash>-isms to work.
+
+=item *
+
+New strategy C<auto_cd>.
+
+=item *
+
+Builtin B<strategy> now knows command B<available> to list available strategies
+
+=back
+
+
+=head2 Bug Fixes
+
+=over 4
+
+=item *
+
+The Unix resize handler now works correctly in big B<xterm>s.
+
+=item *
+
+Added C<print "\n"> on CTRL-C to clean up display.
+
+=item *
+
+Fixed generation of C<$Psh::history_file>.
+
+=back
+
+
+=head2 Other Changes
+
+=over 4
+
+=item *
+
+Added F<README.perl5.004> to explain about C<File::Spec>
+
+=item *
+
+Strategies C<fallback_builtin> and C<perlfunc> modularized and moved into C<Psh::Strategy::*>
+
+=item *
+
+C<Perlfunc> configuration variables are now in C<Psh::Strategy::Perlfunc> for cleanliness.
+
+=item *
+
+Removed C<&Psh::news()> since there's no need for it being included in B<psh> just for the B<tryme> script.
+
+=item *
+
+List of builtins for which autoloading is supported is built automatically during startup.
+
+=back
+
+
+=cut
+
 
 ###############################################################################
 ###############################################################################

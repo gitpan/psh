@@ -6,7 +6,7 @@ use Carp 'croak';
 use Config;
 use File::Spec;
 
-$VERSION = do { my @r = (q$Revision: 1.5 $ =~ /\d+/g); sprintf "%d."."%02d" x $#r, @r }; # must be all one line, for MakeMaker
+$VERSION = do { my @r = (q$Revision: 1.8 $ =~ /\d+/g); sprintf "%d."."%02d" x $#r, @r }; # must be all one line, for MakeMaker
 
 $ospackage="Psh::OS::Unix";
 
@@ -82,8 +82,7 @@ sub glob {
 		$pattern= $2;
 		$prefix=~ s:/$::;
 	    $dir= File::Spec->catdir($dir,$prefix);
-		$pattern=~s/\\/\\\\/g;
-		$pattern=~s/\./\\./g;
+		$pattern=~s/(?<!\\)([^a-zA-Z0-9\*\?])/\\$1/g;
 		$pattern=~s/\*/[^\/]*/g;
 		$pattern=~s/\?/./g;
 		$pattern='[^\.]'.$pattern if( substr($pattern,0,2) eq '.*');
@@ -92,12 +91,12 @@ sub glob {
 		# Too difficult to simulate, so use slow variant
 		my $old=$ENV{PWD};
 		chdir $dir;
-		@result= CORE::glob($pattern);
+		$pattern=~s/(?<!\\)([^a-zA-Z0-9\*\?])/\\$1/g;
+		@result= eval { CORE::glob($pattern); };
 		chdir $old;
 	} else {
 		# The fast variant for simple matches
-		$pattern=~s/\\/\\\\/g;
-		$pattern=~s/\./\\./g;
+		$pattern=~s/(?<!\\)([^a-zA-Z0-9\*\?])/\\$1/g;
 		$pattern=~s/\*/.*/g;
 		$pattern=~s/\?/./g;
 		$pattern='[^\.]'.$pattern if( substr($pattern,0,2) eq '.*');
@@ -137,7 +136,6 @@ sub signal_description {
 	my $signal_name= signal_name(shift);
 	my $desc= $Psh::text{sig_description}->{$signal_name};
    	if( defined($desc) and $desc) {
-		
 		return "SIG$signal_name - $desc";
 	}
 	return "signal $signal_name";

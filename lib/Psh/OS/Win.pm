@@ -17,7 +17,7 @@ if ($@) {
 	die "\n";
 }
 
-$VERSION = do { my @r = (q$Revision: 1.16 $ =~ /\d+/g); sprintf "%d."."%02d" x $#r, @r }; # must be all one line, for MakeMaker
+$VERSION = do { my @r = (q$Revision: 1.22 $ =~ /\d+/g); sprintf "%d."."%02d" x $#r, @r }; # must be all one line, for MakeMaker
 
 #
 # For documentation see Psh::OS::Unix
@@ -36,15 +36,17 @@ sub get_hostname {
 }
 
 sub get_known_hosts {
-        my $hosts_file = "$ENV{windir}\HOSTS";
-        my $hfh = new FileHandle($hosts_file, 'r');
-        return ("localhost") unless defined($hfh);
-        my $hosts_text = join('', <$hfh>); }
-        $hfh->close();
-        return Psh::Util::parse_hosts_file($hosts_text);  
+	my $hosts_file = "$ENV{windir}\\HOSTS";
+	my $hfh = new FileHandle($hosts_file, 'r');
+	return qw("localhost") unless defined($hfh);
+	my $hosts_text = join('', <$hfh>);
+	$hfh->close();
+	return Psh::Util::parse_hosts_file($hosts_text);  
 }
 
 sub exit {
+	Psh::save_history();
+	$ENV{SHELL} = $Psh::old_shell if $Psh::old_shell;
 	CORE::exit(@_[0]) if $_[0];
 	CORE::exit(0);
 }
@@ -78,7 +80,7 @@ sub inc_shlvl {
 		$Psh::login_shell = 0;
 		$ENV{SHLVL}++;
 	}
-}                                                                               
+}
 
 sub reap_children {1};
 
@@ -99,7 +101,7 @@ sub execute_complex_command {
 	for( my $i=0; $i<@array; $i++) {
 		my ($coderef, $how, $options, $words, $strat, $text)= @{$array[$i]};
 		my $line= join(' ',@$words);
-		my ($eval_thingie,@return_val)= &$coderef( \$line, $words,$how);
+		my ($eval_thingie,$words,$bgflag,@return_val)= &$coderef( \$line, $words,$how);
 		my @tmp;
 
 		if( defined($eval_thingie)) {
@@ -157,6 +159,18 @@ sub get_home_dir {
 	return "\\";
 } # we really should return something (profile?)
 
+
+sub get_rc_files {
+	my @rc=();
+
+	if (-r '/etc/pshrc') {
+		push @rc, '/etc/pshrc';
+	}
+	my $home= Psh::OS::get_home_dir();
+	if ($home) { push @rc, File::Spec->catfile($home,$rc_file) };
+	return @rc;
+}
+
 sub remove_readline_handler {1} #FIXME: better than not running at all
 
 sub is_path_absolute {
@@ -168,7 +182,7 @@ sub is_path_absolute {
 
 sub get_path_extension {
 	my $extsep = $Psh::OS::PATH_SEPARATOR || ';';
-	my $pathext = $Registry->{"HKEY_LOCAL_MACHINE\\System\\CurrentControlSet\\Control\\Session Manager\\Environment\\PATHEXT"} || $ENV{PATHEXT} || ".exe";
+	my $pathext = $Registry->{"HKEY_LOCAL_MACHINE\\System\\CurrentControlSet\\Control\\Session Manager\\Environment\\PATHEXT"} || $ENV{PATHEXT} || ".cmd;.bat;.exe;.com";
 	return split("$extsep",$pathext);
 }
 
@@ -183,7 +197,7 @@ Psh::OS::Win - Contains Windows specific code
 
 =head1 SYNOPSIS
 
-	use Psh::OS;
+	use Psh::OS::Win32;
 
 =head1 DESCRIPTION
 

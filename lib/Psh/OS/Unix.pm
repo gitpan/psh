@@ -11,7 +11,7 @@ use User::pwent;
 
 use Psh::Util ':all';
 
-$VERSION = do { my @r = (q$Revision: 1.31 $ =~ /\d+/g); sprintf "%d."."%02d" x $#r, @r }; # must be all one line, for MakeMaker
+$VERSION = do { my @r = (q$Revision: 1.48 $ =~ /\d+/g); sprintf "%d."."%02d" x $#r, @r }; # must be all one line, for MakeMaker
 
 $Psh::OS::PATH_SEPARATOR=':';
 $Psh::OS::FILE_SEPARATOR='/';
@@ -77,15 +77,29 @@ sub display_pod {
 # Exit psh - you won't believe it, but exit needs special treatment on
 # MacOS
 #
-sub exit() {
-        CORE::exit($_[0]) if $_[0];
-        CORE::exit(0);
+sub exit {
+	Psh::Util::print_debug_class('i',"[Psh::OS::Unix::exit() called]\n");
+	Psh::save_history();
+	$ENV{SHELL} = $Psh::old_shell if $Psh::old_shell;
+	CORE::exit($_[0]) if $_[0];
+	CORE::exit(0);
 }
 
 sub get_home_dir {
 	my $user = shift || $ENV{USER};
 	return $ENV{HOME} if ((! $user) && (-d $ENV{HOME}));
 	return getpwnam($user)->dir;
+}
+
+sub get_rc_files {
+	my @rc=();
+
+	if (-r '/etc/pshrc') {
+		push @rc, '/etc/pshrc';
+	}
+	my $home= Psh::OS::get_home_dir();
+	if ($home) { push @rc, File::Spec->catfile($home,'.pshrc') };
+	return @rc;
 }
 
 sub get_path_extension { return (''); }
@@ -119,37 +133,53 @@ sub inc_shlvl {
 # Make pid the foreground process of the terminal controlling STDIN.
 #
 
-sub _give_terminal_to
 {
-	# If a fork of a psh fork tries to call this then exit
-	# as it would probably mess up the shell
-	# This hack is necessary as e.g.
-	# alias ls=/bin/ls
-	# ls &
-	# call fork_process from within a fork
+	my $terminal_owner=0;
 
-	return if $Psh::OS::Unix::forked_already;
+	sub _give_terminal_to
+    {
+		# If a fork of a psh fork tries to call this then exit
+		# as it would probably mess up the shell
+		# This hack is necessary as e.g.
+		# alias ls=/bin/ls
+		# ls &
+		# call fork_process from within a fork
 
-	local $SIG{TSTP}  = 'IGNORE';
-	local $SIG{TTIN}  = 'IGNORE';
-	local $SIG{TTOU}  = 'IGNORE';
-	local $SIG{CHLD}  = 'IGNORE';
+		return if $Psh::OS::Unix::forked_already;
+		return if $terminal_owner==$_[0];
+		$terminal_owner=$_[0];
 
-	tcsetpgrp(fileno STDIN,$_[0]);
+		local $SIG{TSTP}  = 'IGNORE';
+		local $SIG{TTIN}  = 'IGNORE';
+		local $SIG{TTOU}  = 'IGNORE';
+		local $SIG{CHLD}  = 'IGNORE';
+
+		my ($pkg,$file,$line,$sub)= caller(1);
+		my $status= tcsetpgrp(fileno STDIN,$_[0]);
+	}
+
+	sub _get_terminal_owner
+    {
+		return $terminal_owner;
+	}
 }
 
 
+
 #
-# void _wait_for_system(int PID, [bool QUIET_EXIT])
+# void _wait_for_system(int PID, [bool QUIET_EXIT], [bool NO_TERMINAL])
 #
 # Waits for a program to be stopped/ended, prints no message on normal
 # termination if QUIET_EXIT is specified and true.
+#
+# If NO_TERMINAL is specified and true it won't try to transfer
+# terminal ownership
 #
 
 sub _wait_for_system
 {
 	my($pid, $quiet) = @_;
-        if (!defined($quiet)) { $quiet = 0; }
+	if (!defined($quiet)) { $quiet = 0; }
 
 	my $psh_pgrp = getpgrp;
 
@@ -161,20 +191,37 @@ sub _wait_for_system
 
 	my $term_pid= $job->{pgrp_leader}||$pid;
 
+	_give_terminal_to($term_pid);
+
+	my $output='';
+
+	my $returnpid;
 	while (1) {
-		_give_terminal_to($term_pid);
 		if (!$job->{running}) { $job->continue; }
-		my $returnpid;
 		{
 			local $Psh::currently_active = $pid;
 			$returnpid = waitpid($pid,&WUNTRACED);
 			$pid_status = $?;
 		}
-		_give_terminal_to($psh_pgrp);
 		last if $returnpid<1;
-		_handle_wait_status($returnpid, $pid_status, $quiet);
+
+		# Very ugly work around for the problem that
+		# processes occasionally get SIGTTOUed without reason
+		# We can do this here because we know the process has
+		# to run and could not have been stopped by TTOU
+		if ($returnpid== $pid &&
+			&WIFSTOPPED($pid_status) &&
+			Psh::OS::signal_name(WSTOPSIG($pid_status)) eq 'TTOU') {
+			$job->continue;
+			next;
+		}
+		# Collect output here - we cannot print it while another
+		# process might possibly be in the foreground;
+		$output.=_handle_wait_status($returnpid, $pid_status, $quiet, 1);
 		last if $returnpid == $pid;
 	}
+	_give_terminal_to($psh_pgrp);
+	Psh::Util::print_out($output) if length($output);
 }
 
 #
@@ -185,7 +232,7 @@ sub _wait_for_system
 #
 
 sub _handle_wait_status {
-	my ($pid, $pid_status, $quiet) = @_;
+	my ($pid, $pid_status, $quiet, $collect) = @_;
 	# Have to obtain these before we potentially delete the job
 	my $job= $Psh::joblist->get_job($pid);
 	my $command = $job->{call};
@@ -193,7 +240,12 @@ sub _handle_wait_status {
 	my $verb='';
 
 	if (&WIFEXITED($pid_status)) {
-		$verb= "\u$Psh::text{done}" if (!$quiet);
+		my $status=&WEXITSTATUS($pid_status);
+		if ($status==0) {
+			$verb= "\u$Psh::text{done}" if (!$quiet);
+		} else {
+			$verb= "\u$Psh::text{error}";
+		}
 		$Psh::joblist->delete_job($pid);
 	} elsif (&WIFSIGNALED($pid_status)) {
 		$verb = "\u$Psh::text{terminated} (" .
@@ -205,8 +257,12 @@ sub _handle_wait_status {
 		$job->{running}= 0;
 	}
 	if ($verb && $visindex>0) {
-		Psh::Util::print_out( "[$visindex] $verb $pid $command\n");
+		my $line="[$visindex] $verb $pid $command\n";
+		return $line if $collect;
+
+		Psh::Util::print_out($line );
 	}
+	return '';
 }
 
 
@@ -239,7 +295,10 @@ sub execute_complex_command {
 		$text||='';
 
 		my $line= join(' ',@$words);
-		($eval_thingie,@return_val)= &$coderef( \$line, $words,$how,$i>0);
+		my $forcefork;
+		($eval_thingie,$words,$forcefork, @return_val)= &$coderef( \$line, $words,$how,$i>0);
+
+		$forcefork|=$i<$#array;
 
 		if( defined($eval_thingie)) {
 			if( $#array) {
@@ -253,8 +312,10 @@ sub execute_complex_command {
 			}
 			my $termflag=!($i==$#array);
 
-			($pid,@tmp)= _fork_process($eval_thingie,$fgflag,$text,$options,
-									   $pgrp_leader,$termflag);
+			($pid,@tmp)= _fork_process($eval_thingie,$words,
+									   $fgflag,$text,$options,
+									   $pgrp_leader,$termflag,
+									   $forcefork);
 
 			if( !$i && !$pgrp_leader) {
 				$pgrp_leader=$pid;
@@ -345,58 +406,66 @@ sub _remove_redirects {
 }
 
 #
-# void fork_process( code|program, int fgflag, text to display in jobs,
-#                    pid of pgroupleader, set terminal flag)
+# void fork_process( code|program, words,
+#                    int fgflag, text to display in jobs,
+#                    redirection options,
+#                    pid of pgroupleader, do not set terminal flag,
+#                    force a fork?)
 #
 
 sub _fork_process {
-    my( $code, $fgflag, $string, $options,
-		$pgrp_leader, $termflag) = @_;
+    my( $code, $words, $fgflag, $string, $options,
+		$pgrp_leader, $termflag, $forcefork) = @_;
 	my($pid);
 
 	# HACK - if it's foreground code AND perl code
 	# we do not fork, otherwise we'll never get
 	# the result value, changed variables etc.
-	if( $fgflag && ref($code) eq 'CODE') {
+	if( $fgflag && !$forcefork && ref($code) eq 'CODE') {
 		my $cache= _setup_redirects($options);
 		my @result= eval { &$code };
 		_remove_redirects($cache);
-		Psh::Util::print_error($@) if $@;
+		Psh::Util::print_error($@) if $@ && $@ !~/^SECRET/;
 		return (0,@result);
 	}
 
 	unless ($pid = fork) { #child
+		unless (defined $pid) {
+			Psh::Util::print_error_i18n('fork_failed');
+			return (-1,undef);
+		}
+
 		$Psh::OS::Unix::forked_already=1;
 		close(READ) if( $pgrp_leader);
 		_setup_redirects($options);
-		remove_signal_handlers();
 		setpgid(0,$pgrp_leader||$$);
-		_give_terminal_to($$) if $fgflag && !$termflag;
+		_give_terminal_to($pgrp_leader||$$) if $fgflag && !$termflag;
+		remove_signal_handlers();
 
 		if( ref($code) eq 'CODE') {
 			&{$code};
 			&exit(0);
 		} else {
-			my @words= map { Psh::Parser::unquote($_) }
-			            split ' ',$code;
 			{
 				if( ! ref $options) {
 					exec $code;
 				} else {
-					exec { $words[0] } @words;
+					$code= shift @$words;
+					exec { $code } @$words;
 				}
 			} # Avoid unreachable warning
-			Psh::Util::print_error_i18n(`exec_failed`,$code);
+			Psh::Util::print_error_i18n('exec_failed',$code);
 			&exit(-1);
 		}
 	}
 	setpgid($pid,$pgrp_leader||$pid);
+	_give_terminal_to($pgrp_leader||$pid) if $fgflag && !$termflag;
 	return ($pid,undef);
 }
 
 sub fork_process {
     my( $code, $fgflag, $string, $options) = @_;
-	my ($pid,@result)= _fork_process($code,$fgflag,$string,$options);
+	my ($pid,@result)= _fork_process($code,undef,$fgflag,$string,$options);
 	return @result if !$pid;
 	my $job= $Psh::joblist->create_job($pid,$string);
 	if( !$fgflag) {
@@ -464,6 +533,8 @@ my %special_handlers= (
 					   'CLD'  => \&_ignore_handler,
 					   'TTOU' => \&_ttou_handler,
 					   'TTIN' => \&_ttou_handler,
+					   'TERM' => \&exit,
+					   'HUP'  => \&exit,
 					   'SEGV' => 0,
 					   'WINCH'=> 0,
 					   'ZERO' => 0,
@@ -557,7 +628,8 @@ sub _readline_handler
 {
 	my $sig= shift;
 	setup_readline_handler();
-    die "SECRET $Psh::bin: Signal $sig\n"; # changed to SECRET... just in case
+	print "\n"; # Clean up the display
+	die "SECRET $Psh::bin: Signal $sig\n"; # changed to SECRET... just in case
 }
 
 sub _ttou_handler
@@ -599,8 +671,6 @@ sub _signal_handler
 
 sub _ignore_handler
 {
-	my ($sig) = @_;
-	$SIG{$sig} = \&_ignore_handler;
 }
 
 
@@ -608,7 +678,6 @@ sub _error_handler
 {
 	my ($sig) = @_;
 	Psh::Util::print_error_i18n('unix_received_strange_sig',$sig);
-	$SIG{$sig} = \&_error_handler;
 	kill 'INT', $$; # HACK to stop a possible endless loop!
 }
 
@@ -619,7 +688,7 @@ sub _error_handler
 sub _resize_handler
 {
 	my ($sig) = @_;
-	my ($cols, $rows) = (80, 24);
+	my ($cols, $rows); # Assume nothing so that unless works!
 
 	eval {
 		($cols,$rows)= &Term::Size::chars();
@@ -631,7 +700,7 @@ sub _resize_handler
 		};
 	}
 
-	if(($cols > 0) && ($rows > 0)) {
+	if($cols && $rows && ($cols > 0) && ($rows > 0)) {
 		$ENV{COLUMNS} = $cols;
 		$ENV{LINES}   = $rows;
 		if( $Psh::term) {
@@ -656,22 +725,25 @@ Psh::OS::Unix - contains Unix specific code
 
 =head1 SYNOPSIS
 
-	use Psh::OS;
+	use Psh::OS::Unix;
 
 =head1 DESCRIPTION
 
-TBD
+Implements the Unix specific parts of Psh::OS
 
 =head1 AUTHOR
 
-blaaa
-
-=head1 SEE ALSO
+various
 
 =cut
 
 # The following is for Emacs - I hope it won't annoy anyone
 # but this could solve the problems with different tab widths etc
+#
+### The One True Width of tabs is 8 characters.  The point about tabs over
+### spaces is that it doesn't matter *WHAT* value you give it.
+### Unfortunately people persist in using the space bar.
+### Greater than three spaces should be a macro for TAB in all editors.
 #
 # Local Variables:
 # tab-width:4

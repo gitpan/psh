@@ -1,0 +1,82 @@
+=head1 NAME
+
+psh - Developing for Perl Shell
+
+=for README
+Please read the perlpod manpage! Pay particular attention to the markup
+sequences (B<>, C<>, I<>, etc.).
+
+=head1 COPYRIGHT
+
+Copyright (C) 1999-2000 Gregor N. Purdy. All rights reserved.
+This script is free software. It may be copied or modified according
+to the same terms as Perl itself.
+
+
+=head1 DESCRIPTION
+
+=head2 DEBUGGING
+
+The B<-d> option puts B<psh> into "debugging" mode, which prints
+diagnostic output. Note that you can also enter/leave this
+debugging mode in a running B<psh> via the C<$Psh::debugging> variable.
+
+Possible values for B<-d>/C<$Psh::debugging> are either 0 to disable
+it, 1 to enable all debug messages or a string of characters where
+each character denotes a certain class of debug messages.
+
+=over 4
+
+=item C<s> - enables printing of information about the chosen strategy for each command
+
+=item C<o> - enables printing of "other" debug info - info which has not been further categorized
+
+=item C<f> - enables printing of the rc files read by psh on startup while it is executed and allows easy tracing of problems in these files
+
+=item C<i> - enables printing of initialization debug info
+
+=back
+
+=head2 BUILT-IN FUNCTIONS
+
+On startup, C<psh> scans the Psh::Builtins:: namespace and will add
+the names of all found dynamic loadable builtins to C<%Psh::built_ins>.
+
+During evaluation of an input line, C<psh> will first check the
+%Psh::built_ins variable. If this fails it will try to locate an
+appropriate built-in function in Psh::Builtins.pm.
+
+A dynamical loadable builtin has to be in a file called Builtinname.pm
+within the Psh::Builtins:: namespace and has at least one subroutine, called
+'bi_builtinname'. Additionally, it may provide a cmpl_builtinname
+subroutine for a custom completion. Furthermore, a builtin should
+contain some pod documentation, starting with "=item * " and ending
+with "=cut".
+
+For a list of the predefined B<psh> builtins, use the "help" command from within B<psh>.
+
+=head2 DEFINING EVALUATION STRATEGIES
+
+There are two hashes, I<%Psh::strategy_which> and I<%Psh::strategy_eval>.
+An evaluation strategy called "C<foo>" is implemented by putting a
+subroutine object in each of these hashes keyed by "foo". The first
+subroutine should accept a reference to a string (the exact input
+line) and a reference to an array of strings (the array of "words" in
+the input line produced by C<&Psh::decompose>, provided as a convenience
+so that each individual strategy doesn't have to recompute this). It
+should return a string, which should be empty if the strategy does not
+apply to that input line, and otherwise should be an arbitrary
+non-null string describing how that strategy applies to that line. It
+is guaranteed that the string passed in will contain some
+non-whitespace, and that the first string in the array of words is
+non-empty.
+
+The I<$strategy_eval{foo}> routine accepts the same two first arguments
+and a third argument, which is the string returned by
+I<$strategy_which{foo}>. It should do the evaluation, and return the
+result. Note that the I<$strategy_eval> function will be evaluated in
+an array context. 
+
+
+
+=cut

@@ -6,7 +6,6 @@ use Cwd qw(:DEFAULT chdir);
 use FileHandle;
 use File::Spec;
 use File::Basename;
-use Getopt::Std;
 
 use Psh::Util ':all';
 use Psh::Locale::Base;
@@ -40,16 +39,18 @@ use Psh::Prompt;
 # The other global variables are private, lexical variables.
 #
 
-use vars qw($bin $news_file $cmd $echo $host $debugging
-			$perlfunc_expand_arguments $executable_expand_arguments
+use vars qw($bin $cmd $echo $host $debugging
+		    $executable_expand_arguments
 			$VERSION $term @absed_path $readline_saves_history
 			$history_file $save_history $history_length $joblist
 			$eval_preamble $currently_active $handle_segfaults
 			$result_array $which_regexp $ignore_die $old_shell
-			$rc_file $login_shell
+		    $login_shell $change_title $window_title
+            $interactive
 			@val @wday @mon @strategies @unparsed_strategies @history
+            @executable_noexpand
 			%text %perl_builtins %perl_builtins_noexpand
-			%strategy_which %built_ins %strategy_eval);
+			%strategy_which %built_ins %strategy_eval %fallback_builtin);
 
 # These constants are used in flock().
 use constant LOCK_SH => 1; # shared lock (for reading)
@@ -57,7 +58,7 @@ use constant LOCK_EX => 2; # exclusive lock (for writing)
 use constant LOCK_NB => 4; # non-blocking request (don't wait)
 use constant LOCK_UN => 8; # free the lock
 
-$VERSION = do { my @r = (q$Revision: 1.35 $ =~ /\d+/g); sprintf "%d."."%02d" x $#r, @r }; # must be all one line, for MakeMaker
+$VERSION = do { my @r = (q$Revision: 1.57 $ =~ /\d+/g); sprintf "%d."."%02d" x $#r, @r }; # must be all one line, for MakeMaker
 
 
 
@@ -66,7 +67,7 @@ $VERSION = do { my @r = (q$Revision: 1.35 $ =~ /\d+/g); sprintf "%d."."%02d" x $
 #
 
 
-my @default_strategies     = qw(brace built_in executable fallback_builtin eval);
+my @default_strategies = qw(brace built_in executable eval);
 my @default_unparsed_strategies = qw(comment bang);
 my $input;
 
@@ -108,93 +109,12 @@ my $input;
 # @Psh::strategies contains the evaluation strategies in order that
 # will be called by evl().
 #
-#
-# TODO: Is there a better way to detect Perl built-in-functions and
-# keywords than the following? Surprisingly enough,
-# defined(&CORE::abs) does not work, i.e., it returns false.
-#
-# If a value is anything > 1, then it's the minimum number of
-# arguments for that function
-#
-
-%perl_builtins = qw( -X 1 abs 1 accept 1 alarm 1 atan2 1 bind 1
-binmode 1 bless 1 caller 1 chdir 1 chmod 3 chomp 1 chop 1 chown 3 chr
-1 chroot 1 close 1 closedir 1 connect 3 continue 1 cos 1 crypt 1
-dbmclose 1 dbmopen 1 defined 1 delete 1 die 1 do 1 dump 1 each 1
-endgrent 1 endhostent 1 endnetent 1 endprotoent 1 endpwent 1
-endservent 1 eof 1 eval 1 exec 3 exists 1 exit 1 exp 1 fcntl 1 fileno
-1 flock 1 for 1 foreach 1 fork 1 format 1 formline 1 getc 1 getgrent 1
-getgrgid 1 getgrnam 1 gethostbyaddr 1 gethostbyname 1 gethostent 1
-getlogin 1 getnetbyaddr 1 getnetbyname 1 getnetent 1 getpeername 1
-getpgrp 1 getppid 1 getpriority 1 getprotobyname 1 getprotobynumber 1
-getprotoent 1 getpwent 1 getpwnam 1 getpwuid 1 getservbyname 1
-getservbyport 1 getservent 1 getsockname 1 getsockopt 1 glob 1 gmtime
-1 goto 1 grep 3 hex 1 import 1 if 1 int 1 ioctl 1 join 1 keys 1 kill 1
-last 1 lc 1 lcfirst 1 length 1 link 1 listen 1 local 1 localtime 1 log
-1 lstat 1 m// 1 map 1 mkdir 3 msgctl 1 msgget 1 msgrcv 1 msgsnd 1 my 1
-next 1 no 1 oct 1 open 1 opendir 1 ord 1 pack 1 package 1 pipe 1 pop 1
-pos 1 print 1 printf 1 prototype 1 push 1 q/STRING/ 1 qq/STRING/ 1
-quotemeta 1 qw/STRING/ 1 qx/STRING/ 1 rand 1 read 1 readdir 1 readlink
-1 recv 1 redo 1 ref 1 rename 1 require 1 reset 1 return 1 reverse 1
-rewinddir 1 rindex 1 rmdir 1 s/// 1 scalar 1 seek 1 seekdir 1 select 1
-semctl 1 semget 1 semop 1 send 1 setgrent 1 sethostent 1 setnetent 1
-setpgrp 1 setpriority 1 setprotoent 1 setpwent 1 setservent 1
-setsockopt 1 shift 1 shmctl 1 shmget 1 shmread 1 shmwrite 1 shutdown 1
-sin 1 sleep 1 socket 1 socketpair 1 sort 1 splice 1 split 1 sprintf 1
-sqrt 1 srand 1 stat 1 study 1 sub 1 substr 1 symlink 1 syscall 1
-sysread 1 system 1 syswrite 1 tell 1 telldir 1 tie 1 time 1 times 1
-tr/// 1 truncate 1 uc 1 ucfirst 1 umask 1 undef 1 unless 1 unlink 1
-unpack 1 unshift 1 untie 1 until 1 use 1 utime 1 values 1 vec 1 wait 1
-waitpid 1 wantarray 1 warn 1 while 1 write 1 y/// 1 );
-
 
 #
-# The following hash contains names where the arguments should never
-# undergo expansion in the sense of
-# $Psh::perlfunc_expand_arguments. For example, any perl keyword where
-# an argument is interpreted literally by Perl anyway (such as "use":
-# use $yourpackage; is a syntax error) should be on this
-# list. Flow-control keywords should be here too.
-#
-# TODO: Is this list complete ?
+# Contains names of fallback builtins we support
 #
 
-%perl_builtins_noexpand = qw( continue 1 do 1 for 1 foreach 1 goto 1 if 1 last 1 local 1 my 1 next 1 package 1 redo 1 sub 1 until 1 use 1 while 1);
-
-#
-# bool matches_perl_binary(string FILENAME)
-#
-# Returns true if FILENAME referes directly or indirectly to the
-# current perl executable
-#
-
-sub matches_perl_binary
-{
-	my ($filename) = @_;
-
-	#
-	# Chase down symbolic links, but don't crash on systems that don't
-	# have them:
-	#
-
-	if ($Config{d_readlink}) {
-		my $newfile;
-		while ($newfile = readlink($filename)) { $filename = $newfile; }
-	}
-
-	if ($filename eq $Config{perlpath}) { return 1; }
-
-	my ($perldev,$perlino) = (stat($Config{perlpath}))[0,1];
-	my ($dev,$ino) = (stat($filename))[0,1];
-
-	#
-	# TODO: Does the following work on non-Unix OS ?
-	#
-
-	if ($perldev == $dev and $perlino == $ino) { return 1; }
-
-	return 0;
-}
+%fallback_builtin = ('ls'=>1, 'env'=>1 );
 
 #
 # EVALUATION STRATEGIES:
@@ -208,214 +128,20 @@ sub matches_perl_binary
 	'built_in' => sub {
 	     my $fnname = ${$_[1]}[0];
          no strict 'refs';
-         if( $built_ins{$fnname}) {
-	         if (Psh::Builtins::_is_aliased($fnname)) {
-	                 return "(alias $fnname)";
-	         } else {
-	                 return "(built_in $fnname)";
-             }
-         }
          if( ref *{"Psh::Builtins::bi_$fnname"}{CODE} eq 'CODE') {
  	         return "(Psh::Builtins::bi_$fnname)";
          }
+         if( $built_ins{$fnname}) {
+			 eval 'use Psh::Builtins::'.ucfirst($fnname);
+             return "(Psh::Builtins::".ucfirst($fnname)."::bi_$fnname)";
+		 }
 		 return '';
-	},
-
-    'fallback_builtin' => sub {
-		my $fnname = ${$_[1]}[0];
-        no strict 'refs';
-        if( ref *{"Psh::Builtins::Fallback::bi_$fnname"}{CODE} eq 'CODE') {
-			return "(built_in $fnname)";
-		}
-		return '';
-	},
-
-	'auto_resume' => sub {
-		my $fnname= ${$_[1]}[0];
-        $joblist->enumerate;
-        while( my $job= $joblist->each) {
-			next if $job->{running};
-			my $call= $job->{call};
-			if( $call=~ m:/([^/\s]+)\s*$: ) {
-				$call= $1;
-			}
-			return "(auto-resume $call)" if( $call eq $fnname);
-		}
-        return '';
-	},
-
-	'perlfunc' => sub {
-		my $firstword = ${$_[1]}[0];
-		my $fnname = $firstword;
-		my $parenthesized = 0;
-		# catch "join(':',@foo)" here as well:
-		if ($firstword =~ m/\(/) {
-		        $parenthesized = 1;
-		        $fnname = (split('\(', $firstword))[0];
-		}
-		my $qPerlFunc = 0;
-		if ( exists($perl_builtins{$fnname})) {
-		        my $needArgs = $perl_builtins{$fnname};
-    		        if ($needArgs > 0
-			    and ($parenthesized
-				 or scalar(@{$_[1]}) >= $needArgs)) {
-			        $qPerlFunc = 1;
-			}
-		} else {
-		        $qPerlFunc = (protected_eval("defined(&{'$fnname'})"))[0];
-		}
-		if ( $qPerlFunc ) {
-			my $copy = ${$_[0]};
-
-			#
-			# remove braces containing no whitespace
-			# and at least one comma in checking,
-			# since they might be for brace expansion
-			#
-
-			$copy =~ s/{\S*,\S*}//g;
-
-			if (!$perlfunc_expand_arguments
-				or exists($perl_builtins_noexpand{$fnname})
-			        or $fnname ne $firstword
-				or $copy =~ m/[(){},]/) {
-				return ${$_[0]};
-			} else {                     # no parens, braces, or commas, so  do expansion
-				my $ampersand = '';
-				my $lastword  = pop @{$_[1]};
-
-				if ($lastword eq '&') { $ampersand = '&';         }
-				else                  { push @{$_[1]}, $lastword; }
-
-				shift @{$_[1]};          # OK to destroy command line since we matched
-
-				#
-				# No need to do variable expansion, because the whole thing
-				# will be evaluated later.
-				#
-
-				my @args = Psh::Parser::glob_expansion($_[1]);
-
-				#
-				# But we will quote barewords, expressions involving
-				# $variables, filenames, and the like:
-				#
-
-				foreach (@args) {
-					if (&Psh::Parser::needs_double_quotes($_)) {
-	                    $_ = "\"$_\"";
-                    }
-				}
-
-				my $possible_proto = '';
-
-				if (defined($perl_builtins{$fnname})) {
-					$possible_proto = prototype("CORE::$fnname");
-				} else {
-					$possible_proto = prototype($fnname);
-				}
-
-				#
-				# TODO: Can we use the prototype more fully here?
-				#
-
-				my $command = '';
-
-				if (defined($possible_proto) and $possible_proto != '@') {
-					#
-					# if it's not just a list operator, better not put in
-					# parens, because they could change the semantics
-					#
-
-					$command = "$fnname " . join(",",@args);
-				} else {
-					#
-					# Otherwise put in the parens to avoid any ambiguity: we
-					# want to pass the given list of args to the function. It
-					# would be better in perlfunc eval to get a reference to
-					# the function and simply pass the args to it, but I
-					# couldn't find any way to make that work with perl
-					# builtins. You can't take a reference to CODE::sort, for
-					# example.
-					#
-
-					$command .= "$fnname(" . join(",",@args) . ')';
-				}
-
-				return $command . $ampersand;			}
-		}
-
- 		return '';
-	},
-
-	'perlscript' => sub {
-		my $script = which(${$_[1]}[0]);
-
-		if (defined($script) and -r $script) {
-			#
-			# let's see if it really looks like a perl script
-			#
-
-			my $sfh = new FileHandle($script);
-			my $firstline = <$sfh>;
-
-			$sfh->close();
-			chomp $firstline;
-
-			my $filename;
-			my $switches;
-
-			if (($filename,$switches) =
-				($firstline =~ m|^\#!\s*(/.*perl)(\s+.+)?$|go)
-				and matches_perl_binary($filename)) {
-				my $possibleMatch = $script;
-				my %bangLineOptions = ();
-
-				if( $switches) {
-					$switches=~ s/^\s+//go;
-					local @ARGV = split(' ', $switches);
-
-					#
-					# All perl command-line options that take aruments as of
-					# Perl 5.00503:
-					#
-
-					getopt('DeiFlimMx', \%bangLineOptions);
-				}
-
-				if ($bangLineOptions{w}) {
-					$possibleMatch .= " warnings";
-					delete $bangLineOptions{w};
-				}
-
-				#
-				# TODO: We could handle more options. [There are some we
-				# can't. -d, -n and -p are popular ones that would be tough.]
-				#
-
-				if (scalar(keys %bangLineOptions) > 0) {
-					print_debug("[[perlscript: skip $script, options $switches.]]\n");
-					return '';
-				}
-
-				return $possibleMatch;
-			}
-		}
-
-		return '';
 	},
 
 	'executable' => sub {
 		my $executable = which(${$_[1]}[0]);
 
-		if (defined($executable)) {
-			shift @{$_[1]}; # OK to destroy the command line because we're
-                            # going to match this strategy
-			@newargs= $executable_expand_arguments?variable_expansion($_[1]):
-				$_[1];
-			@newargs = Psh::Parser::glob_expansion(\@newargs,' ');
-			return "$executable @newargs";
-		}
+		return "$executable" if defined($executable);
 
 		return '';
 	},
@@ -444,92 +170,34 @@ sub matches_perl_binary
         my @words= @{shift()};
         my $command= shift @words;
         my $rest= join(' ',@words);
-        if( $built_ins{$command}) {
-	        return (sub { &{$built_ins{$command}}($rest)}, undef);
-        }
-        {
-	        no strict 'refs';
-	        $coderef= *{"Psh::Builtins::bi_$command"};
-            return (sub { &{$coderef}($rest,\@words); }, undef );
-        }
-	},
-
-	'fallback_builtin' => sub {
-		my $line= ${shift()};
-        my @words= @{shift()};
-        my $command= shift @words;
-        my $rest= join(' ',@words);
-        {
-	        no strict 'refs';
-	        $coderef= *{"Psh::Builtins::bi_$command"};
-            return (sub { &{$coderef}($rest,\@words); }, undef );
-        }
-	},
-
-	'auto_resume' => sub {
-		my $fnname= ${$_[1]}[0];
-        $joblist->enumerate;
-        my $index=0;
-        while( my $job= $joblist->each) {
-			next if $job->{running};
-			my $call= $job->{call};
-			if( $call=~ m:/([^/\s]+)\s*$: ) {
-				$call= $1;
-			}
-			if( $call eq $fnname) {
-				Psh::OS::restart_job(1,$index);
-				return undef;
-			}
-			$index++;
+        no strict 'refs';
+        if( ref *{"Psh::Builtins::bi_$command"}{CODE} eq 'CODE') {
+			$coderef= *{"Psh::Builtins::bi_$command"};
+        } elsif( $built_ins{$command}) {
+			$coderef= *{'Psh::Builtins::'.ucfirst($command)."::bi_$command"};
 		}
-        return undef;
+        return (sub { &{$coderef}($rest,\@words); }, [], 0, undef );
 	},
 
-	'perlscript' => sub {
-		my ($script, @options) = split(' ',$_[2]);
-		my @arglist = @{$_[1]};
+	'executable' => sub {
+		my @args=@_;
+		my @newargs= @{$args[1]};
+		if ($executable_expand_arguments) {
+			my $flag=0;
 
-		shift @arglist; # Get rid of script name
-		my $fgflag = 1;
-
-		if (scalar(@arglist) > 0) {
-			my $lastarg = pop @arglist;
-
-			if ($lastarg =~ m/\&$/) {
-				$fgflag = 0;
-				$lastarg =~ s/\&$//;
+			foreach my $re (@executable_noexpand) {
+				if ($args[2]=~ m{$re}) {
+					$flag=1;
+					last;
+				}
 			}
-
-			if ($lastarg) { push @arglist, $lastarg; }
+			@newargs= variable_expansion(\@newargs) unless $flag;
 		}
+		@newargs = Psh::Parser::glob_expansion(\@newargs);
+		@newargs = map { Psh::Parser::unquote($_)} @newargs;
 
-		print_debug("[[perlscript $script, options @options, args @arglist.]]\n");
-
-		my $pid;
-
-		my %opts = ();
-		foreach (@options) { $opts{$_} = 1; }
-
-
-		return (sub {
-			package main;
-			# TODO: Is it possible/desirable to put main in the pristine
-			# state that it typically is in when a script starts up,
-			# i.e. undefine all routines and variables that the user has set?
-
-			local @ARGV = @arglist;
-			local $^W;
-
-			if ($opts{warnings}) { $^W = 1; }
-			else                 { $^W = 0; }
-
-			do $script;
-
-			exit 0;
-		}, undef);
+		return ("$args[2] @newargs", ["$args[2]",@newargs], 0, undef, );
 	},
-
-	'executable' => sub { return ("$_[2]",undef); },
 );
 
 $strategy_eval{brace}= $strategy_eval{eval}= sub {
@@ -540,27 +208,19 @@ $strategy_eval{brace}= $strategy_eval{eval}= sub {
 		$todo=~ s/\}([qg])\s*$/\}/;
 		my $mods= $1 || '';
 		if( $mods eq 'q' ) { # non-print mode
-			$code='while(<STDIN>) { '.$todo.' ; }';
+			$code='while(<STDIN>) { @_= split /\s+/; '.$todo.' ; }';
 		} elsif( $mods eq 'g') { # grep mode
 			$code='while(<STDIN>) { @_= split /\s+/; print $_ if eval { '.$todo.' }; } ';
 		} else {
-			$code='while(<STDIN>) { '.$todo.' ; print $_ if $_; }';
+			$code='while(<STDIN>) { @_= split /\s+/; '.$todo.' ; print $_ if $_; }';
 		}
-		return (sub {return protected_eval($code,'eval'); }, undef);
+		return (sub {return protected_eval($code,'eval'); }, [], 0, undef);
     } else {
 		return (sub {
 			return protected_eval($todo,'eval');
-		}, undef);
+		}, [], 0, undef);
 	}
 };
-
-$strategy_eval{perlfunc}= sub {
-	my $todo= $_[2];
-	return (sub {
-		return protected_eval($todo,'eval');
-	}, undef);
-};
-
 
 #
 # void handle_message (string MESSAGE, string FROM = 'eval')
@@ -600,12 +260,19 @@ sub handle_message
 sub evl {
 	my ($line, @use_strats) = @_;
 
-	if (!defined(@use_strats) or scalar(@use_strats) == 0) {
+	# In case multi-line input is passed to evl
+	if (ref $line eq 'ARRAY') {
+		foreach (@$line) {
+			evl($_,@use_strats);
+		}
+		return;
+	}
+
+	if (!@use_strats) {
 		@use_strats = @strategies;
 	}
 
 	my @elements= Psh::Parser::parse_line($line, @use_strats);
-
 	return undef if ! @elements;
 
 	my @result=();
@@ -637,8 +304,12 @@ sub read_until
 	$input = '';
 
 	while (1) {
-		$temp = &$get(Psh::Prompt::prompt_string($prompt_templ));
-		last unless defined($temp);
+		$temp = &$get(Psh::Prompt::prompt_string($prompt_templ),
+					  1,\&Psh::Prompt::pre_prompt_hook);
+		if (!defined($temp)) {
+			print_error_i18n('input_incomplete',$sofar,$bin);
+			return '';
+		}
 		last if $temp =~ m/^$terminator$/;
 		$input .= $temp;
 	}
@@ -661,7 +332,8 @@ sub read_until_complete
 	my $temp;
 
 	while (1) {
-		$temp = &$get(Psh::Prompt::prompt_string($prompt_templ),1);
+		$temp = &$get(Psh::Prompt::prompt_string($prompt_templ),1,
+					  \&Psh::Prompt::pre_prompt_hook);
 		if (!defined($temp)) {
 			print_error_i18n('input_incomplete',$sofar,$bin);
 			return '';
@@ -700,9 +372,11 @@ sub process
 	my $result_array_ref = \@Psh::val;
 	my $result_array_name = 'Psh::val';
 
+	my $control_d_counter=0;
+
 	while (1) {
 		if ($q_prompt) {
-			$input = &$get(Psh::Prompt::prompt_string(Psh::Prompt::normal_prompt()));
+			$input = &$get(Psh::Prompt::prompt_string(Psh::Prompt::normal_prompt()), 0, \&Psh::Prompt::pre_prompt_hook);
 		} else {
 			$input = &$get();
 		}
@@ -711,7 +385,18 @@ sub process
 
 		$cmd++;
 
-		last unless defined($input);
+		unless (defined($input)) {
+			last unless $interactive;
+			print STDOUT "\n";
+			$control_d_counter++;
+			my $control_d_max=$ENV{IGNOREEOF}||0;
+			if ($control_d_max !~ /^\d$/) {
+				$control_d_max=10;
+			}
+			Psh::OS::exit() if ($control_d_counter>=$control_d_max);
+			next;
+		}
+		$control_d_counter=0;
 
 		if ($input =~ m/^\s*$/) { next; }
 		my $continuation = $q_prompt ? Psh::Prompt::continue_prompt() : '';
@@ -828,7 +513,8 @@ sub process_file
 {
 	my ($path) = @_;
 
-	print_debug("[[PROCESSING FILE $path]]\n");
+	print_debug("[PROCESSING FILE $path]\n");
+	$interactive=0;
 
 	if (!-r $path) {
 		print_error_i18n('cannot_read_script',$path,$bin);
@@ -844,16 +530,22 @@ sub process_file
 
 	eval { flock($pfh, LOCK_SH); };
 
-	process(0, sub { return <$pfh>; }); # don't prompt
+	process(0, sub {
+				my $txt=<$pfh>;
+				print_debug_class('f',$txt);
+				return $txt;
+			}); # don't prompt
 
 	eval { flock($pfh, LOCK_UN); };
 	$pfh->close();
 
-	print_debug("[[FINISHED PROCESSING FILE $path]]\n");
+	$interactive=1;
+
+	print_debug("[FINISHED PROCESSING FILE $path]\n");
 }
 
 #
-# string iget(string PROMPT [, boolean returnflag])
+# string iget(string PROMPT [, boolean returnflag [, code prompt_hook]])
 #
 # Interactive line getting routine. If we have a
 # Term::ReadLine instance, use it and record the
@@ -874,16 +566,17 @@ sub process_file
 # iget() uses PROMPT as the prompt; this may be the empty string if no
 # prompting is necessary.
 #
-# TODO: Handle ^D nicely (i.e. allow log out or at least print "\n";)
-#
 
 sub iget
 {
 	my $prompt = shift;
 	my $returnflag= shift;
+	my $prompt_hook= shift;
+
 	my $prompt_pre= '';
 	my $line;
 	my $sigint = 0;
+	$interactive=1;
 
 	# Additional newline handling for prompts as Term::ReadLine::Perl
 	# cannot use them properly
@@ -900,10 +593,12 @@ sub iget
 		# Trap ^C in an eval.  The sighandler will die which will be
 		# trapped.  Then we reprompt
 		if ($term) {
+			&$prompt_hook if $prompt_hook;
 			print $prompt_pre if $prompt_pre;
 			eval { $line = $term->readline($prompt); };
 		} else {
 			eval {
+				&$prompt_hook if $prompt_hook;
 				print $prompt_pre if $prompt_pre;
 				print $prompt if $prompt;
 				$line = <STDIN>;
@@ -927,46 +622,41 @@ sub iget
 	Psh::OS::remove_readline_handler();
 	Psh::OS::reinstall_resize_handler();
 
+	return undef unless defined $line;
 	chomp $line;
 
-# [ gtw: Why monkey with the input? If we take out whitespace now,
-#   we'll never know if it was there. Better wait.
-# ]
-
-#	$line =~ s/^\s+//;
-#	$line =~ s/\s+$//;
-
-	if ($term and $line !~ m/^\s*$/) {
-		$term->addhistory($line);
-
-		if ($save_history && !$readline_saves_history) {
+	if ($line && $line !~ m/^\s*$/) {
+		if (!@history || $history[$#history] ne $line) {
+			$term->addhistory($line) if $term;
 			push(@history, $line);
+			if( @Psh::history>$Psh::history_length) {
+				splice(@Psh::history,0,-$Psh::history_length);
+			}
 		}
 	}
 
 	return $line . "\n";         # This is expected by other code.
 }
 
-
-#
-# string news()
-#
-# Return the news
-
-sub news
+sub save_history
 {
-	if (-r $news_file) {
-		# Backticks replaced to be portable
-		my $text='';
-		open( FILE, "< $news_file");
-		while( <FILE>) { $text.=$_; }
-		close( FILE);
-		return $text;
-	} else {
-		return '';
+	Psh::Util::print_debug_class('o',"[Saving history]\n");
+	if( $Psh::save_history) {
+		if ($Psh::readline_saves_history) {
+			$Psh::term->WriteHistory($Psh::history_file);
+		} else {
+			my $fhist = new FileHandle($Psh::history_file, 'a');
+			if (defined($fhist)) {
+				eval { flock($fhist, LOCK_EX); };
+				foreach (@Psh::history) {
+					$fhist->print("$_\n");
+				}
+				eval { flock($fhist, LOCK_UN); };
+				$fhist->close();
+			}
+		}
 	}
 }
-
 
 #
 # void minimal_initialize()
@@ -988,22 +678,29 @@ sub minimal_initialize
 	$eval_preamble               = 'package main;';
 	$currently_active            = 0;
 	$result_array                = '';
-	$perlfunc_expand_arguments   = 0;
 	$executable_expand_arguments = 1;
 	$which_regexp                = '^[-a-zA-Z0-9_.~+]*$'; #'
+
+	if ($]>=5.005) {
+		eval {
+			$which_regexp= qr/$which_regexp/; # compile for speed reasons
+		}
+	}
+
 	$cmd                         = 1;
 
 	$bin                         = basename($0);
 
-	$news_file                   = "$bin.NEWS";
-
 	$old_shell = $ENV{SHELL} if $ENV{SHELL};
 	$ENV{SHELL} = $0;
 	$ENV{PWD} = cwd;
+	$ENV{PSH_TITLE} = $bin;
 
 	Psh::OS::inc_shlvl();
-
 	Psh::OS::setup_signal_handlers();
+	Psh::Builtins::build_autoload_list();
+
+	$Psh::window_title='\w';
 
 	# The following accessible variables are undef during the
 	# .pshrc file:
@@ -1018,6 +715,11 @@ sub minimal_initialize
 	$joblist= new Psh::Joblist();
 
 	@val = ();
+	@history= ();
+
+	# I don't know wether this should really be pre-initialized
+	@executable_noexpand= ('whois','/ezmlm-','/mail$','/mailx$',
+						   '/pine$');
 
 	Psh::Locale::Base::init();
 }
@@ -1031,10 +733,15 @@ sub minimal_initialize
 
 sub finish_initialize
 {
-	Psh::OS::setup_sigsegv_handler if $Psh::handle_segfaults;
+	Psh::OS::setup_sigsegv_handler() if $Psh::handle_segfaults;
 
 	$save_history    = 1               if !defined($save_history);
 	$history_length  = $ENV{HISTSIZE} || 50 if !defined($history_length);
+	$change_title    = 1               if !defined($change_title);
+
+	if( $change_title) {
+		$ENV{PSH_TITLE}= cwd;
+	}
 
 	if (!defined($longhost)) {
 		$longhost                    = Psh::OS::get_hostname();
@@ -1045,60 +752,63 @@ sub finish_initialize
 		$host= $1 if( $longhost=~ /([^\.]+)\..*/);
 	}
 	if (!defined($history_file)) {
-		$history_file                = File::Spec->catfile(Psh::OS::get_home_dir(),$history_file);
+		$history_file= File::Spec->catfile(Psh::OS::get_home_dir(),
+										   ".${bin}_history");
 	}
 
 
-    #
-    # Set up Term::ReadLine:
-    #
-	eval "use Term::ReadLine;";
-
-	if ($@) {
-		$term = undef;
-		print_error_i18n(no_readline);
-	} else {
-		eval { $term= Term::ReadLine->new('psh'); };
-		if( $@) {
-			# Try one more time after a second, maybe the tty is
-			# not setup
-			sleep 1;
+	if (-t STDIN) {
+		#
+		# Set up Term::ReadLine:
+		#
+		eval "use Term::ReadLine;";
+		
+		if ($@) {
+			$term = undef;
+			print_error_i18n(no_readline);
+		} else {
 			eval { $term= Term::ReadLine->new('psh'); };
 			if( $@) {
-				print_error_i18n(readline_error,$@);
-				$term= undef;
+				# Try one more time after a second, maybe the tty is
+				# not setup
+				sleep 1;
+				eval { $term= Term::ReadLine->new('psh'); };
+				if( $@) {
+					print_error_i18n(readline_error,$@);
+					$term= undef;
+				}
+			}
+			if( $term) {
+				$term->MinLine(10000);   # We will handle history adding
+				# ourselves (undef causes trouble).
+				$term->ornaments(0);
+				print_debug_class('i',"[Using ReadLine: ", $term->ReadLine(), "]\n");
+				if ($term->ReadLine() eq "Term::ReadLine::Gnu") {
+					$readline_saves_history = 1;
+					$term->StifleHistory($history_length); # Limit history
+				}
+				&Psh::Completion::init();
+				$term->Attribs->{completion_function} =
+				  \&Psh::Completion::completion;
 			}
 		}
-		if( $term) {
-			$term->MinLine(10000);   # We will handle history adding
-			# ourselves (undef causes trouble).
-			$term->ornaments(0);
-			print_debug("Using ReadLine: ", $term->ReadLine(), "\n");
-			if ($term->ReadLine() eq "Term::ReadLine::Gnu") {
-				$readline_saves_history = 1;
-				$term->StifleHistory($history_length); # Limit history
+
+		#
+		# Set up Term::Size:
+		#
+		eval "use Term::Size 'chars'";
+		
+		if ($@) {
+			print_debug_class('i',"[Term::Size not available. Trying Term::ReadKey\n]");
+			eval "use Term::ReadKey";
+			if( $@) {
+				print_debug_class('i',"[Term::ReadKey not available - no resize handling!]\n");
 			}
-			&Psh::Completion::init();
-			$term->Attribs->{completion_function} =
-				\&Psh::Completion::completion;
 		}
+		else    { print_debug_class('i',"[Using &Term::Size::chars().]\n"); }
+
+		Psh::OS::reinstall_resize_handler();
 	}
-
-    #
-    # Set up Term::Size:
-    #
-	eval "use Term::Size 'chars'";
-
-	if ($@) {
-		print_debug("Term::Size not available. Trying Term::ReadKey\n");
-		eval "use Term::ReadKey";
-		if( $@) {
-			print_debug("Term::ReadKey not available - no resize handling!\n");
-		}
-	}
-	else    { print_debug("Using &Term::Size::chars().\n"); }
-
-	Psh::OS::reinstall_resize_handler();
 	# ReadLine objects often mess with the SIGWINCH handler
 
 	if (defined($term) and $save_history) {
@@ -1131,19 +841,15 @@ sub process_rc
 	my $opt_r= shift;
 	my @rc;
 
-	print_debug("[ LOOKING FOR $rc_file ]\n");
-
 	if ($opt_r) {
 		push @rc, $opt_r;
 	} else {
-		my $home= Psh::OS::get_home_dir();
-		if ($home) { push @rc, File::Spec->catfile($home,$rc_file) };
-		push @rc, "$rc_file" unless $home eq cwd;
+		push @rc, Psh::OS::get_rc_files();
 	}
 
 	foreach my $rc (@rc) {
 		if (-r $rc) {
-			print_debug("[ PROCESSING $rc ]\n");
+			print_debug_class('i',"[PROCESSING $rc]\n");
 			process_file($rc);
 		}
 	}
@@ -1158,11 +864,11 @@ sub process_rc
 
 sub process_args
 {
-	print_debug("[ PROCESSING @ARGV FILES ]\n");
+	print_debug_class('i',"[PROCESSING @ARGV FILES]\n");
 
 	foreach my $arg (@ARGV) {
 		if (-r $arg) {
-			print_debug("[ PROCESSING $arg ]\n");
+			print_debug('i',"[PROCESSING $arg]\n");
 			process_file($arg);
 		}
 	}
@@ -1182,7 +888,7 @@ sub main_loop
 	my $interactive = (-t STDIN) and (-t STDOUT);
 	my $get;
 
-	print_debug("[[STARTING MAIN LOOP]]\n");
+	print_debug_class('i',"[STARTING MAIN LOOP]\n");
 
 	if ($interactive) { $get = \&iget;                  }
 	else              { $get = sub { return <STDIN>; }; }
@@ -1201,52 +907,6 @@ sub is_number
 	return defined($test) && $test &&
 		$test=~/^([+-]?)(?=\d|\.\d)\d*(\.\d*)?([Ee]([+-]?\d+))?$/o;
 }
-
-#
-# void symbols()
-#
-# Print out the symbols of each type used by a package. Note: in testing,
-# it bears out that the filehandles are present as scalars, and that arrays
-# are also present as scalars. The former is not particularly surprising,
-# since they are implemented as tied objects. But, use vars qw(@X) causes
-# both @X and $X to show up in this display. This remains mysterious.
-#
-
-sub symbols
-{
-	my $pack = shift;
-	my (@ref, @scalar, @array, @hash, @code, @glob, @handle);
-	my @sym;
-
-	{
-		no strict qw(refs);
-		@sym = keys %{*{"${pack}::"}};
-	}
-
-	for my $sym (sort @sym) {
-		next unless $sym =~ m/^[a-zA-Z]/; # Skip some special variables
-		next if     $sym =~ m/::$/;       # Skip all package hashes
-
-		{
-			no strict qw(refs);
-
-			push @ref,    "\$$sym" if ref *{"${pack}::$sym"}{SCALAR} eq 'REF';
-			push @scalar, "\$$sym" if ref *{"${pack}::$sym"}{SCALAR} eq 'SCALAR';
-			push @array,  "\@$sym" if ref *{"${pack}::$sym"}{ARRAY}  eq 'ARRAY';
-			push @hash,   "\%$sym" if ref *{"${pack}::$sym"}{HASH}   eq 'HASH';
-			push @code,   "\&$sym" if ref *{"${pack}::$sym"}{CODE}   eq 'CODE';
-			push @handle, "$sym"   if ref *{"${pack}::$sym"}{FILEHANDLE};
-		}
-	}
-
-	print_out("Reference: ", join(' ', @ref),    "\n");
-	print_out("Scalar:    ", join(' ', @scalar), "\n");
-	print_out("Array:     ", join(' ', @array),  "\n");
-	print_out("Hash:      ", join(' ', @hash),   "\n");
-	print_out("Code:      ", join(' ', @code),   "\n");
-	print_out("Handle:    ", join(' ', @handle), "\n");
-}
-
 
 ##############################################################################
 ##############################################################################

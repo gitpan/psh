@@ -4,7 +4,7 @@ use strict;
 use vars qw(%prompt_vars $VERSION);
 use Cwd;
 
-$VERSION = do { my @r = (q$Revision: 1.2 $ =~ /\d+/g); sprintf "%d."."%02d" x $#r, @r }; # must be all one line, for MakeMaker
+$VERSION = do { my @r = (q$Revision: 1.6 $ =~ /\d+/g); sprintf "%d."."%02d" x $#r, @r }; # must be all one line, for MakeMaker
 
 #
 # string prompt_string(TEMPLATE)
@@ -12,7 +12,7 @@ $VERSION = do { my @r = (q$Revision: 1.2 $ =~ /\d+/g); sprintf "%d."."%02d" x $#
 # Construct a prompt string from TEMPLATE.
 #
 
-my $default_prompt='\s% ';
+my $default_prompt = '\s% ';
 
 %prompt_vars = (
 	'd' => sub {
@@ -40,22 +40,21 @@ my $default_prompt='\s% ';
 			return getlogin || (getpwuid($>))[0] || "uid$>";
 		},
 	'w' => sub { 
-		    my $dir= cwd;
-			my $home= Psh::OS::get_home_dir();
-			if( $home) {
-				$dir =~ s/^$home/\~/;
-			}
-		    return $dir;
+			my $dir = cwd;
+			my $home = Psh::OS::get_home_dir();
+			return $dir unless (length($home) > length($Psh::OS::FILE_SEPARATOR));	# in case the home dir is the root dir
+			$dir =~ s/^${home}/\~/ if $home;
+			return $dir;
 		},
 	'W' => sub {
-		    my $dir = cwd;
+			my $dir = cwd;
 			$dir =~ s/^.*\///;
 			return $dir||'/';
 		},
 	'#' => sub { return $Psh::cmd; },
 	'$' => sub { return ($> ? '$' : '#'); },
-	'[' => sub { return ''},
-	']' => sub { return ''},
+	'[' => sub { return $Psh::term->ReadLine() eq 'Term::ReadLine::Gnu'?"\001":''},
+	']' => sub { return $Psh::term->ReadLine() eq 'Term::ReadLine::Gnu'?"\002":''},
 );
 
 
@@ -152,6 +151,21 @@ sub continue_prompt {
 	$prompt= $ENV{PS2} unless defined $prompt;
 	$prompt= '> ' unless defined $prompt;
 	return $prompt;
+}
+
+sub pre_prompt_hook {
+	change_title();
+}
+
+sub change_title {
+	my $title= $Psh::window_title;
+	$title= $ENV{PSH_TITLE} unless defined $title;
+	return if !$title;
+	$title= prompt_string($title);
+	my $term= $ENV{TERM};
+	if( $term=~ /^(rxvt.*)|(xterm.*)|(.*xterm)|(kterm)|(aixterm)|(dtterm)/) {
+		print "\017\033]2;$title\007";
+	}
 }
 
 1;

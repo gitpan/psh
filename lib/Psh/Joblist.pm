@@ -5,7 +5,7 @@ use vars qw($VERSION);
 
 use Psh::Job;
 
-$VERSION = do { my @r = (q$Revision: 1.6 $ =~ /\d+/g); sprintf "%d."."%02d" x $#r, @r }; # must be all one line, for MakeMaker
+$VERSION = do { my @r = (q$Revision: 1.9 $ =~ /\d+/g); sprintf "%d."."%02d" x $#r, @r }; # must be all one line, for MakeMaker
 
 sub new {
 	my $class = shift;
@@ -82,13 +82,34 @@ sub find_job {
 
 	for (my $i = $#$jobs_order; $i >= 0; $i--) {
 		my $job = $jobs_order->[$i];
-		
+
 		if(!$job->{running}) {
-			$job_to_start = $i;
-			return $job;
+			return wantarray?($i,$job):$job;
 		}
 	}
 	return undef;
+}
+
+sub find_last_with_name {
+	my ($self, $name, $runningflag) = @_;
+	$self->enumerate();
+	my $index=0;
+	while( my $job= $self->each) {
+		next if $runningflag && $job->{running};
+		my $call= $job->{call};
+		if ($call=~ m:([^/\s]+)\s*: ) {
+			$call= $1;
+		} elsif( $call=~ m:/([^/\s]+)\s+.*$: ) {
+			$call= $1;
+		} elsif ( $call=~ m:^([^/\s]+): ) {
+			$call= $1;
+		}
+		if( $call eq $name) {
+			return wantarray?($index,$job->{pid},$job->{call}):$index;
+		}
+		$index++;
+	}
+	return wantarray?():undef;
 }
 
 #

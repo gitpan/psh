@@ -10,14 +10,14 @@ use File::Spec;
 
 require Exporter;
 
-$VERSION = do { my @r = (q$Revision: 1.20 $ =~ /\d+/g); sprintf "%d."."%02d" x $#r, @r }; # must be all one line, for MakeMaker
+$VERSION = do { my @r = (q$Revision: 1.24 $ =~ /\d+/g); sprintf "%d."."%02d" x $#r, @r }; # must be all one line, for MakeMaker
 
 @ISA= qw(Exporter);
 
 @EXPORT= qw( );
 @EXPORT_OK= qw( starts_with ends_with print_list);
-%EXPORT_TAGS = ( all => [qw(print_warning print_debug print_error
-							print_warning_i18n
+%EXPORT_TAGS = ( all => [qw(print_warning print_debug print_debug_class
+							print_warning_i18n print_error
 							print_out print_error_i18n print_out_i18n
 							which abs_path)] );
 
@@ -28,9 +28,22 @@ sub print_warning
 	print STDERR @_;
 }
 
+#
+# Print unclassified debug output
+#
 sub print_debug
 {
-	print STDERR @_ if $Psh::debugging;
+	print STDERR @_ if $Psh::debugging && $Psh::debugging =~ /o/;
+}
+
+#
+# Print classified debug output
+#
+sub print_debug_class
+{
+	my $class= shift;
+	print STDERR @_ if $Psh::debugging =~ /$class/ ||
+	  $Psh::debugging==1;
 }
 
 sub print_error
@@ -178,16 +191,24 @@ if (!$@) {
 
 	my $last_path_cwd = '';
 	my %hashed_cmd    = ();
+	my $FS=$Psh::OS::FILE_SEPARATOR;
+
+	my $re1="\Q$FS\E";
+	my $re2="^(.*)\Q$FS\E([^\Q$FS\E]+)\$";
+
+	if ($]>=5.005) {
+		eval {
+			$re1= qr{$re1};
+			$re2= qr{$re2};
+		}
+	}
 
 	sub which
     {
 		my $cmd      = shift;
-		my $FS= $Psh::OS::FILE_SEPARATOR;
 
-		#print_debug("[which $cmd]\n");
-
-		if ($cmd =~ m|\Q$FS\E|) {
-			$cmd =~ m|^(.*)\Q$FS\E([^\Q$FS\E]+)$|;
+		if ($cmd =~ m|$re1|o) {
+			$cmd =~ m|$re2|o;
 			my $path_element= $1;
 			my $cmd_element= $2||'';
 			my $try = abs_path($path_element).$FS.$cmd_element;
@@ -223,11 +244,10 @@ if (!$@) {
 			foreach my $ext (@path_extension) {
 				if ((-x $try.$ext) and (!-d _)) { 
 					$hashed_cmd{$cmd} = $try.$ext;
-					return $try.$ext; 
+					return $try.$ext;
 				}
 			}
 		}
-      
 		$hashed_cmd{$cmd} = undef;
 
 		return undef;
@@ -269,7 +289,8 @@ sub parse_hosts_file {
 	my @lines= split( /\n|\r|\r\n/, $text);
 	my @result= ();
 	foreach my $line (@lines) {
-		next if $line=~/^\s*\#/;
+		next if $line=~/^\s*$/;   # Skip blank lines
+		next if $line=~/^\s*\#/;  # Skip comment lines
 		$line=~/^\s*\S+\s(.*)$/;
 		my $rest= $1;
 		push @result, grep { length($_)>0 } split( /\s/, $rest);

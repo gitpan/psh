@@ -8,7 +8,7 @@ use strict;
 use vars qw($VERSION);
 use locale;
 
-$VERSION = do { my @r = (q$Revision: 1.18 $ =~ /\d+/g); sprintf "%d."."%02d" x $#r, @r }; # must be all one line, for MakeMaker
+$VERSION = do { my @r = (q$Revision: 1.24 $ =~ /\d+/g); sprintf "%d."."%02d" x $#r, @r }; # must be all one line, for MakeMaker
 
 my %sig_description = (
 					   'TTOU' => 'TTY output',
@@ -46,8 +46,11 @@ while(<DATA>) {
 
 __DATA__
 # Misc texts
-exec_failed=Error (exec %1) failed.
+exec_failed=Error - Could not exec %1.
+fork_failed=Error - Could not fork.
+no_command=Command not found or syntax wrong: %1
 simulate_perl_w=Simulating -w switch and strict
+no_r_flag=If you intended to use a different rc file, please now use the -f switch.\n -r is now reserved for 'restricted mode'.
 perm_denied=%2: %1: Permission denied.
 no_such_dir=%2: %1: No such directory.
 no_such_builtin=%2: %1: No such builtin.
@@ -56,7 +59,6 @@ no_jobcontrol=Your system does not support job control
 interal_error=Internal psh error. psh would have died now.
 input_incomplete=%2: End of input during incomplete expression %1
 clueless=%2: Can't determine how to evaluate '%1'.
-# '
 psh_echo_wrong=%1: WARNING: $Psh::echo is not a CODE reference or an ordinary scalar.
 psh_result_array_wrong=%1: WARNING: $Psh::result_array is neither an ARRAY reference or a string.
 cannot_read_script=%2: Cannot read script '%1'
@@ -81,6 +83,9 @@ bi_which_no_command=which: requires a command or command line as argument
 bi_alias_none=No aliases.
 bi_alias_cant_a=Cannot alias '-a'.
 bi_jobs_none=No jobs.
+bi_strategy_list=Following strategies are used:
+bi_strategy_wrong_arg=Wrong argument for builtin strategy.
+bi_strategy_notfound=Could not find strategy %1.
 
 # Stuff for Job handling
 done=done\
@@ -88,12 +93,13 @@ terminated=terminated\
 stopped=stopped\
 restart=restart\
 foreground=foreground\
+error=error\
 
 # Readline
 readline_interrupted}=\nInterrupted!
 readline_error=Readline did not start up properly:\n%1
 no_readline=No Readline module available. Please install Term::ReadLine::Perl
-
+old_gnu_readline=Your version of Term::ReadLine::Gnu is %1 which is less than 1.06.  This is a known to be buggy version.  Please upgrade.\n
 
 # Prompt stuff
 prompt_wrong_type=%1: Warning: $Psh::prompt is neither a SCALAR nor a CODE reference.

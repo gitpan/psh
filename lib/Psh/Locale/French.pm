@@ -4,7 +4,7 @@ use strict;
 use vars qw($VERSION);
 use locale;
 
-$VERSION = do { my @r = (q$Revision: 1.2 $ =~ /\d+/g); sprintf "%d."."%02d" x $#r, @r }; # must be all one line, for MakeMaker
+$VERSION = do { my @r = (q$Revision: 1.3 $ =~ /\d+/g); sprintf "%d."."%02d" x $#r, @r }; # must be all one line, for MakeMaker
 
 BEGIN {
 	my %sig_description = (
@@ -36,6 +36,7 @@ BEGIN {
 	$Psh::text{readline_interrupted}="\nInterrompu!\n";
 	$Psh::text{readline_error}="Readline n'a pas initialisé correctement:\n%1\n";
 	$Psh::text{no_readline}="Aucun module de Readline disponible. Veuillez installer Term::Readline::Perl\n";
+	$Psh::text{old_gnu_readline}="Votre module Term::ReadLine::Gnu %1 devrait être au moins 1.06 pour le bien fonctionnement du système.  Veuillez le mettre à jour.\n";
 	$Psh::text{unalias_noalias}="unalias: `%1' n'est pas dit\n";
 	$Psh::text{builtin_readline_header}="En utilisant Readline: %1, avec les dispositifs:\n";
 	$Psh::text{no_jobcontrol}="Votre système ne supporte pas la gestion de tâche\n";

@@ -8,7 +8,10 @@ use Carp;
 use Psh::OS;
 use Psh::Util;
 
-$VERSION = do { my @r = (q$Revision: 1.13 $ =~ /\d+/g); sprintf "%d."."%02d" x $#r, @r }; # must be all one line, for MakeMaker
+$VERSION = do { my @r = (q$Revision: 1.20 $ =~ /\d+/g); sprintf "%d."."%02d" x $#r, @r }; # must be all one line, for MakeMaker
+
+my %perlq_hash = qw|' ' " " q( ) qw( ) qq( )|;
+
 
 #
 # array decompose(regexp DELIMITER, string LINE, int PIECES, 
@@ -99,33 +102,33 @@ sub decompose
     #generate $quoteexp and fix up the closers:
     my $quoteexp = $nevermatches;
     for my $opener (keys %qhash) {
-            $quoteexp .= '|' . quotemeta($opener);
+		$quoteexp .= '|' . quotemeta($opener);
 	    $qhash{$opener} = quotemeta($qhash{$opener});
     }
 
     while ($line) {
-            if ($startNewPiece) { 
-	            push @pieces, '';
-		    $startNewPiece = 0; 
+		if ($startNewPiece) {
+			push @pieces, '';
+		    $startNewPiece = 0;
 		    $freshPiece = 1;
 	    }
 	    if (scalar(@pieces) == $num) { last; }
 	    # $delimexp is unparenthesized below because we have
 	    # already arranged for it to contain exactly one backref ()
-            my ($prefix,$delimiter,$quote,$meta,$rest) =
+		my ($prefix,$delimiter,$quote,$meta,$rest) =
 	      ($line =~ m/^((?:[^\\]|\\.)*?)(?:$delimexp|($quoteexp)|($metaexp))(.*)$/s);
 	    if (!$keep and defined($prefix)) {
-	    	    # remove backslashes in unquoted part:
-	            $prefix =~ s/\\(.)/$1/g;
+			# remove backslashes in unquoted part:
+			$prefix =~ s/\\(.)/$1/g;
 	    }
 	    if (defined($delimiter)) {
 		    $pieces[scalar(@pieces)-1] .= $prefix;
 		    if ($saveDelimiters) {
-		            if ($pieces[scalar(@pieces)-1] or !$freshPiece) {
-			            push @pieces, $delimiter;
-		            } else {
-			            $pieces[scalar(@pieces)-1] = $delimiter;
-		            }
+				if (length($pieces[scalar(@pieces)-1]) or !$freshPiece) {
+					push @pieces, $delimiter;
+				} else {
+					$pieces[scalar(@pieces)-1] = $delimiter;
+				}
 			    $startNewPiece = 1;
 		    } elsif (scalar(@pieces) > 1 or $pieces[0]) {
 		  	    $startNewPiece = 1;
@@ -138,33 +141,33 @@ sub decompose
 			    if ($keep) {
 				    $pieces[scalar(@pieces)-1] .= "$prefix$quote$restOfQuote${$quotehash}{$quote}";
 			    } else { #Not keeping, so remove backslash
-                                     #from backslashed $quote occurrences
-			            $restOfQuote =~ s/\\$quote/$quote/g;
+					     #from backslashed $quote occurrences
+					$restOfQuote =~ s/\\$quote/$quote/g;
 				    $pieces[scalar(@pieces)-1] .= "$prefix$restOfQuote";
 			    }
 			    $line = $remainder;
 			    $freshPiece = 0;
 		    } else { # can't find matching quote, give up
-		           $uquote = 1;
-		           last;
+				$uquote = 1;
+				last;
 		    }
 	    } elsif (defined($meta)) {
-                    $pieces[scalar(@pieces)-1] .= $prefix;
-		    if ($pieces[scalar(@pieces)-1] or !$freshPiece) {
+			$pieces[scalar(@pieces)-1] .= $prefix;
+		    if (length($pieces[scalar(@pieces)-1]) or !$freshPiece) {
 			    push @pieces, $meta;
-		    } else { 
+		    } else {
 			    $pieces[scalar(@pieces)-1] = $meta;
 		    }
 		    $line = $rest;
 		    $startNewPiece = 1;
 	    } else { # nothing found, so remainder all one unquoted piece
-	            if (!$keep and $line) {
-	                      $line =~ s/\\(.)/$1/g;
+			if (!$keep and length($line)) {
+				$line =~ s/\\(.)/$1/g;
 		    }
 		    last;
 	    }
     }
-    if ($line) { $pieces[scalar(@pieces)-1] .= $line; }
+    if (length($line)) { $pieces[scalar(@pieces)-1] .= $line; }
     if (defined($unmatched)) { ${$unmatched} = $uquote; }
     return @pieces;
 }
@@ -195,13 +198,11 @@ sub std_tokenize
 # also that unmatched stuff in comments WILL fool this function.)
 #
 
-my %perlq_hash = qw|' ' " " q( ) qw( ) qq( )|;
-
 sub incomplete_expr
 {
     my ($line) = @_;
     my $unmatch = 0;
-    my @words = decompose(' ',$line,undef,1,\%perlq_hash,'[]{}()[]', \$unmatch);
+    my @words = decompose(' ',$line,undef,1,\%perlq_hash,'[\[\]{}()]', \$unmatch);
     if ($unmatch) { return 2; }
     my @openstack = (':'); # : is used as a bottom marker here
     my %open_of_close = qw|) ( } { ] [|;
@@ -306,29 +307,31 @@ sub unquote {
 	return $text;
 }
 
-sub parse_line {
-	my ($line, @use_strats) = @_;
+sub make_tokens {
+	my $line= shift;
+	my @tmpparts= decompose('(\s+|\||;|\&\d*|[1-2]?>>|[1-2]?>|<|\\|=)',
+							$line, undef, 1,\%perlq_hash, '[\[\]{}()]');
 
-	my @words= std_tokenize($line);
-	foreach my $strat (@Psh::unparsed_strategies) {
-		if (!defined($Psh::strategy_which{$strat})) {
-			Psh::Util::print_warning_i18n('no_such_strategy',
-										  $strat,$Psh::bin);
-			next;
+	# Walk through parts and combine parenthesized parts properly
+	my @parts=();
+	my $nestlevel=0;
+	my $tmp='';
+	foreach (@tmpparts) {
+		if (/^[\[\(\{]$/) {
+			$nestlevel++;
+		} elsif (/^[\]\)\}]$/) {
+			$nestlevel--;
 		}
-
-		my $how = &{$Psh::strategy_which{$strat}}(\$line,\@words);
-
-		if ($how) {
-			Psh::Util::print_debug("Using strategy $strat by $how\n");
-			return [ 1, [$Psh::strategy_eval{$strat},
-						 $how, [], \@words, $strat ]];
+		if ($nestlevel) {
+			$tmp.=$_;
+		} elsif (length($tmp)) {
+			push @parts,$tmp.$_;
+			$tmp='';
+		} else {
+			push @parts, $_;
 		}
 	}
 
-	my @parts= decompose('(\s+|\||;|\&\d*|[1-2]?>>|[1-2]?>|<|\\|=)',
-						 $line, undef, 1,
-						 {"'"=>"'","\""=>"\"","{"=>"}"});
 	my @tokens= ();
 	my $previous_token='';
 	while( my $tmp= shift @parts) {
@@ -423,11 +426,35 @@ sub parse_line {
 			$previous_token= $tmp;
 		}
 	}
+	return @tokens;
+}
 
+sub parse_line {
+	my ($line, @use_strats) = @_;
+
+	my @words= std_tokenize($line);
+	foreach my $strat (@Psh::unparsed_strategies) {
+		if (!exists($Psh::strategy_which{$strat})) {
+			Psh::Util::print_warning_i18n('no_such_strategy',
+										  $strat,$Psh::bin);
+			next;
+		}
+
+		my $how = &{$Psh::strategy_which{$strat}}(\$line,\@words);
+
+		if ($how) {
+			Psh::Util::print_debug_class('s',
+										 "[Using strategy $strat by $how]\n");
+			return [ 1, [$Psh::strategy_eval{$strat},
+						 $how, [], \@words, $strat ]];
+		}
+	}
+
+	my @tokens= make_tokens( $line);
 	my @elements=();
 	my $element;
 	while( @tokens > 0) {
-		($element,@tokens)=parse_complex_command(\@tokens,\@use_strats);
+		$element=parse_complex_command(\@tokens,\@use_strats);
 		return undef if ! defined( $element); # TODO: Error handling
 
 		if (@tokens > 0 && $tokens[0]->[0] eq 'END') {
@@ -439,46 +466,41 @@ sub parse_line {
 }
 
 sub parse_complex_command {
-	my @tokens = @{shift()};
-	my @use_strats= @{shift()};
-	my @simplecommands;
-
-	($simplecommands[0], @tokens) = parse_simple_command(\@tokens,
-														 \@use_strats);
-
+	my $tokens= shift;
+	my $use_strats= shift;
 	my $piped= 0;
-
-	while (@tokens > 0 && $tokens[0]->[0] eq 'PIPE') {
-		shift @tokens;
-		my $sc;
-		($sc, @tokens) = parse_simple_command(\@tokens,\@use_strats,$piped);
-		push @simplecommands, $sc;
-		$piped= 1;
-	}
-
 	my $foreground = 1;
-	if (@tokens > 0 && $tokens[0]->[0] eq 'BACKGROUND') {
-		shift @tokens;
-		$foreground = 0;
+	return [ $foreground, _subparse_complex_command($tokens,$use_strats,\$piped,\$foreground,{})];
+}
+
+sub _subparse_complex_command {
+	my ($tokens,$use_strats,$piped,$foreground,$alias_disabled)=@_;
+	my @simplecommands= parse_simple_command($tokens,$use_strats, $piped,$alias_disabled,$foreground);
+
+	while (@$tokens > 0 && $tokens->[0]->[0] eq 'PIPE') {
+		shift @$tokens;
+		push @simplecommands, parse_simple_command($tokens,$use_strats,$piped,$alias_disabled,$foreground);
+		$$piped= 1;
 	}
 
-	return [ $foreground, @simplecommands ], @tokens;
+	if (@$tokens > 0 && $tokens->[0]->[0] eq 'BACKGROUND') {
+		shift @$tokens;
+		$$foreground = 0;
+	}
+	return @simplecommands;
 }
 
 sub parse_simple_command {
-	my @tokens = @{shift()};
-	my @use_strats= @{shift()};
-	my $piped= shift;
+	my ($tokens,$use_strats,$piped,$alias_disabled,$foreground)=@_;
+	my (@words,@options,@savetokens);
 
-	my @words;
-	my @options;
-
-	my $token = shift @tokens;
+	my $token = shift @$tokens;
 	push @words, $token->[1];
-	while (@tokens > 0 &&
-		   ($tokens[0]->[0] eq 'WORD' ||
-			$tokens[0]->[0] eq 'REDIRECT')) {
-		my $token = shift @tokens;
+	while (@$tokens > 0 &&
+		   ($tokens->[0]->[0] eq 'WORD' ||
+			$tokens->[0]->[0] eq 'REDIRECT')) {
+		my $token = shift @$tokens;
+		push @savetokens,$token;
 		if ($token->[0] eq 'WORD') {
 			push @words, $token->[1];
 		} elsif ($token->[0] eq 'REDIRECT') {
@@ -486,20 +508,28 @@ sub parse_simple_command {
 		}
 	}
 
+	if( !$alias_disabled->{$words[0]} && $Psh::Builtins::aliases{$words[0]}) {
+		my $alias= $Psh::Builtins::aliases{$words[0]};
+		$alias =~ s/\'/\\\'/g;
+		$alias_disabled->{$words[0]}=1;
+		unshift @savetokens, make_tokens($alias);
+		return _subparse_complex_command(\@savetokens,$use_strats,$piped,$foreground,$alias_disabled);
+	}
+
 	my $line= join ' ', @words;
-	foreach my $strat (@use_strats) {
-		if (!defined($Psh::strategy_which{$strat})) {
+	foreach my $strat (@$use_strats) {
+		if (!exists($Psh::strategy_which{$strat})) {
 			Psh::Util::print_warning_i18n('no_such_strategy',
 										 $strat,$Psh::bin);
 			next;
 		}
 
-		my $how = &{$Psh::strategy_which{$strat}}(\$line,\@words,$piped);
+		my $how = &{$Psh::strategy_which{$strat}}(\$line,\@words,$$piped);
 
 		if ($how) {
-			Psh::Util::print_debug("Using strategy $strat by $how\n");
-			return [ $Psh::strategy_eval{$strat},
-					 $how, \@options, \@words, $strat, $line ], @tokens;
+			Psh::Util::print_debug_class('s',"[Using strategy $strat by $how]\n");
+			return ([ $Psh::strategy_eval{$strat},
+					 $how, \@options, \@words, $strat, $line ]);
 		}
 	}
 	Psh::Util::print_error_i18n('clueless',$line,$Psh::bin);

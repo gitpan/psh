@@ -1,6 +1,7 @@
 use ExtUtils::MakeMaker;
 
-$pms= {};
+my $pms= {};
+my $pods= {};
 
 open( FILE, "< MANIFEST");
 while( <FILE>)
@@ -10,9 +11,16 @@ while( <FILE>)
 	my $dest= $_;
 	$dest=~ s/^lib/\$(INST_LIBDIR)/;
 	$pms->{$_}=$dest;
-	print "$_ => $dest\n";
 }
 close(FILE);
+
+chdir 'doc';
+
+my @tmp= glob('*.pod');
+foreach (@tmp) {
+	$pods->{'doc/'.$_}='$(INST_MAN1DIR)/'.$_.'$(MAN1EXT)';
+}
+chdir '..';
 
 
 WriteMakefile (
@@ -21,7 +29,7 @@ WriteMakefile (
 	AUTHOR       => 'Gregor N. Purdy (gregor@focusresearch.com)',
 	ABSTRACT     => 'Perl Shell',
 	EXE_FILES    => [ qw(psh) ],
-	MAN1PODS     => { 'psh.pod' => '$(INST_MAN1DIR)/psh.$(MAN1EXT)' },
+	MAN1PODS     => $pods,
     PM           => $pms,
 	dist         => { COMPRESS => 'gzip -9f', SUFFIX => 'gz' }
 );

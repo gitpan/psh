@@ -1,8 +1,16 @@
+2000-04-30
+
+  * Investigate the relevance of the recent discussion about IPC::BashEm
+    (may be renamed) on the perl5-porters list.
+    [GNP]
+
+
 2000-01-01
 
   * Unify builtin's usage_ error messages with help builtin and make
     the help messages translatable. Seriously think about avoiding
 	to hold all error texts in memory all the time. [warp]
+
 
 1999-12-26
 
@@ -24,18 +32,6 @@
     and ?? ... could be long form.
     [GNP]
 
-  * How about this:
-      * 'cd dir' means go to dir (called explicit)
-      * 'cd'     means 'cd ~' (counts as explicit)
-      * 'cd -1'  means back one in list of explicit cd's (like on a web browser)
-      * 'cd %0'  means go to last explicit cd
-      * 'cd +1'  means forward one directory (like on a web browser)
-      * 'cd -'   means 'cd +0' unless at head, in which case it means 'cd -1'
-    And/or, maybe borrow the %N notation for jobs for absolute references.
-    The idea here is that maybe pushd/popd/dirs can be unified with cd so
-    that pushd and popd are just aliases for cd variants...
-    [GNP]
-
   * What is the effect of bash's ':', and should we do the same thing?
     The manpage makes it sound uninteresting, and unnecessary, and
     trying it doesn't make it appear to do anything useful. Have I
@@ -52,14 +48,11 @@
 
 1999-11-01
 
-  * There is something called the XML Shell that is like an xterm, but
+  * There is something called the XMLTerm that is like an xterm, but
     uses XML for its display. Find out if there is anything that can
     be done in psh to make interaction via XML Shell especially nice.
-	(I lost the URL. Please patch this file if you find it...).
-    [GNP]
 
-	Update 1999-12-26: It is acutally called XMLTerm. It was mentioned on
-	MozillaZine on 1999-09-27:
+	XMLTerm was mentioned in MozillaZine on 1999-09-27:
 
 		http://www.mozillazine.org/talkback.html?article=813
 
