@@ -5,7 +5,9 @@ use strict;
 use vars qw($VERSION);
 use Carp;
 
-$VERSION = do { my @r = (q$Revision: 1.7 $ =~ /\d+/g); sprintf "%d."."%02d" x $#r, @r }; # must be all one line, for MakeMaker
+use Psh::OS;
+
+$VERSION = do { my @r = (q$Revision: 1.10 $ =~ /\d+/g); sprintf "%d."."%02d" x $#r, @r }; # must be all one line, for MakeMaker
 
 #
 # array decompose(regexp DELIMITER, string LINE, int PIECES, 
@@ -134,7 +136,9 @@ sub decompose
 		    if (defined($restOfQuote)) {
 			    if ($keep) {
 				    $pieces[scalar(@pieces)-1] .= "$prefix$quote$restOfQuote${$quotehash}{$quote}";
-			    } else {
+			    } else { #Not keeping, so remove backslash
+                                     #from backslashed $quote occurrences
+			            $restOfQuote =~ s/\\$quote/$quote/g;
 				    $pieces[scalar(@pieces)-1] .= "$prefix$restOfQuote";
 			    }
 			    $line = $remainder;
@@ -264,7 +268,15 @@ sub glob_expansion
 			or ($word !~ m/{.*}|\[.*\]|[*?]/)) { # or no globbing characters
 			push @retval, $word;  # don't try to glob it
 		} else { 
-			push @retval, glob($word); 
+		        # Glob it. If anything happens, quote the
+		        # results so they won't be clobbbered later.
+		        my @results = Psh::OS::glob($word);
+			if (scalar(@results) == 0) {
+			         @results = ($word);
+			} elsif (scalar(@results)>1 or $results[0] ne $word) {
+			         foreach (@results) { $_ = "'$_'"; }
+			}
+			push @retval, @results;
 		}
 	}
 

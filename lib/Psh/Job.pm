@@ -1,10 +1,11 @@
-#! /usr/local/bin/perl -w
 package Psh::Job;
 
 use strict;
 use vars qw($VERSION);
 
-$VERSION = do { my @r = (q$Revision: 1.7 $ =~ /\d+/g); sprintf "%d."."%02d" x $#r, @r }; # must be all one line, for MakeMaker
+use Psh::OS;
+
+$VERSION = do { my @r = (q$Revision: 1.11 $ =~ /\d+/g); sprintf "%d."."%02d" x $#r, @r }; # must be all one line, for MakeMaker
 
 #
 # $job= new Psh::Job( pid, call);
@@ -30,7 +31,7 @@ sub continue {
 	my $self= shift;
 
 	# minus sign to wake up the whole group of the child:
-	kill 'CONT', -$self->{pid};
+	kill 'CONT', -$self->{pid} if Psh::OS::has_job_control();
 	$self->{running}=1;
 }
 
