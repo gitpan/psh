@@ -1,5 +1,5 @@
 #
-#	$Id: PCompletion.pm,v 1.19 2001/10/09 16:33:10 warp Exp $
+#	$Id: PCompletion.pm,v 1.20 2003/01/16 19:21:17 gregor Exp $
 #
 #	Copyright (c) 2000-2003 Hiroo Hayashi. All Rights Reserved.
 #
