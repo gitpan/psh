@@ -3,13 +3,16 @@ package Psh::OS::Mac;
 use strict;
 use vars qw($VERSION);
 
-$VERSION = do { my @r = (q$Revision: 1.2 $ =~ /\d+/g); sprintf "%d."."%02d" x $#r, @r }; # must be all one line, for MakeMaker
+$VERSION = do { my @r = (q$Revision: 1.3 $ =~ /\d+/g); sprintf "%d."."%02d" x $#r, @r }; # must be all one line, for MakeMaker
 
 #
 # I just looked at MacPerl and currently doubt that a port of
 # psh with sensible functionality is possible at all
 # -warp (Markus Peter)
 
+sub AUTOLOAD {
+	die "Sorry, no Mac support available.\n";
+}
 
 1;
 

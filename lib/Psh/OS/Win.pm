@@ -4,13 +4,20 @@ use strict;
 use vars qw($VERSION);
 use Psh::Util ':all';
 
-eval { use Win32; }
+use FileHandle;
+use DirHandle;
+
+eval {
+	use Win32;
+	use Win32::TieRegistry 0.20;
+};
+
 if ($@) {
 	print_error_i18n('no_libwin32');
 	die "\n";
 }
 
-$VERSION = do { my @r = (q$Revision: 1.9 $ =~ /\d+/g); sprintf "%d."."%02d" x $#r, @r }; # must be all one line, for MakeMaker
+$VERSION = do { my @r = (q$Revision: 1.16 $ =~ /\d+/g); sprintf "%d."."%02d" x $#r, @r }; # must be all one line, for MakeMaker
 
 #
 # For documentation see Psh::OS::Unix
@@ -19,12 +26,23 @@ $VERSION = do { my @r = (q$Revision: 1.9 $ =~ /\d+/g); sprintf "%d."."%02d" x $#
 $Psh::OS::PATH_SEPARATOR=';';
 $Psh::OS::FILE_SEPARATOR='\\';
 
-# dummy currently
-sub get_hostname { return 'localhost'; }
+$Psh::rc_file = "pshrc";
+$Psh::history_file = "psh_history";
 
-# TODO: locate hosts file on Windows and do the same as for Unix
-# (it can be anywhere in PATH I think)
-sub get_known_hosts { return (); }
+sub get_hostname {
+	my $name_from_reg = $Registry->{"HKEY_LOCAL_MACHINE\\System\\CurrentControlSet\\Control\\ComputerName\\ComputerName\\ComputerName"};
+	return $name_from_reg if $name_from_reg;
+	return 'localhost';
+}
+
+sub get_known_hosts {
+        my $hosts_file = "$ENV{windir}\HOSTS";
+        my $hfh = new FileHandle($hosts_file, 'r');
+        return ("localhost") unless defined($hfh);
+        my $hosts_text = join('', <$hfh>); }
+        $hfh->close();
+        return Psh::Util::parse_hosts_file($hosts_text);  
+}
 
 sub exit {
 	CORE::exit(@_[0]) if $_[0];
@@ -36,7 +54,7 @@ sub exit {
 # void display_pod(text)
 #
 sub display_pod {
-	my $tmp= POSIX::tmpnam;
+	my $tmp= POSIX::tmpnam();
 	my $text= shift;
 
 	open( TMP,">$tmp");
@@ -47,51 +65,85 @@ sub display_pod {
 		use Pod::Text;
 		Pod::Text::pod2text($tmp,*STDOUT);
 	};
-	if( $@) {
-		print $text;
-	}
+	print $text if $@;
 
-	1 while unlink($tmp); #Possibly pointless VMSism
+	unlink($tmp);
 }
 
+sub inc_shlvl {
+	if (! $ENV{SHLVL}) {
+		$Psh::login_shell = 1;
+		$ENV{SHLVL} = 1;
+	} else {
+		$Psh::login_shell = 0;
+		$ENV{SHLVL}++;
+	}
+}                                                                               
+
 sub reap_children {1};
+
+sub execute_complex_command {
+	my @array= @{shift()};
+	my $fgflag= shift @array;
+	my @return_val;
+	my $pgrp_leader=0;
+	my $pid;
+	my $string='';
+	my @tmp;
+
+	if($#array) {
+		print_error("No piping yet.\n");
+		return ();
+	}
+
+	for( my $i=0; $i<@array; $i++) {
+		my ($coderef, $how, $options, $words, $strat, $text)= @{$array[$i]};
+		my $line= join(' ',@$words);
+		my ($eval_thingie,@return_val)= &$coderef( \$line, $words,$how);
+		my @tmp;
+
+		if( defined($eval_thingie)) {
+			@tmp= fork_process($eval_thingie,$fgflag,$text);
+		}
+		if( @return_val < 1 ||
+			!defined($return_val[0])) {
+			@return_val= @tmp;
+		}
+	}
+	return @return_val;
+}
 
 sub fork_process {
 	local( $Psh::code, $Psh::fgflag, $Psh::string) = @_;
 	local $Psh::pid;
 
+	# TODO: perhaps we should use Win32::Process?
 	print_error_i18n('no_jobcontrol') unless $Psh::fgflag;
 
 	if( ref($Psh::code) eq 'CODE') {
-		&{$Psh::code};
+		return &{$Psh::code};
 	} else {
 		system($Psh::code);
 	}
 }
 
-# Simply doing backtick eval - mainly for Prompt evaluation
-sub system {
-	return `@_`;
-}
-
-sub has_job_control { return 0; }
-
-sub glob {
-	my $pattern= shift;
-	my $path= shift;
-	my $old;
-	if( $path) {
-		$old=cwd;
-		chdir abs_path($path);
-	}
-	my @result= glob(shift);
-	if( $old) {
-		chdir $old;
+sub get_all_users {
+	my @result = (".DEFAULT");
+	if (-d "$ENV{windir}\Profiles") {
+		my $Profiles = new DirHandle "$ENV{windir}\Profiles";
+		if (defined($Profiles)) {
+			while (defined(my ($Profile) = $Profiles->read())) {
+				if (-d $Profile) {
+					push (@result, $Profile);
+				}
+			}
+		}
 	}
 	return @result;
 }
 
-sub get_all_users { return (); } # this should have a value on NT and Win9x with multiple profiles
+
+sub has_job_control { return 0; }
 sub restart_job {1}
 sub remove_signal_handlers {1}
 sub setup_signal_handlers {1}
@@ -99,7 +151,13 @@ sub setup_sigsegv_handler {1}
 sub setup_readline_handler {1}
 sub reinstall_resize_handler {1}
 
-sub get_home_dir {1} # we really should return something (profile?)
+sub get_home_dir {
+	my $user= shift;
+	return $ENV{HOME} if( ! $user && $ENV{HOME} );
+	return "\\";
+} # we really should return something (profile?)
+
+sub remove_readline_handler {1} #FIXME: better than not running at all
 
 sub is_path_absolute {
 	my $path= shift;
@@ -110,7 +168,7 @@ sub is_path_absolute {
 
 sub get_path_extension {
 	my $extsep = $Psh::OS::PATH_SEPARATOR || ';';
-	my $pathext = $ENV{PATHEXT} || ".cmd${extsep}.bat${extsep}.com${extsep}.exe";
+	my $pathext = $Registry->{"HKEY_LOCAL_MACHINE\\System\\CurrentControlSet\\Control\\Session Manager\\Environment\\PATHEXT"} || $ENV{PATHEXT} || ".exe";
 	return split("$extsep",$pathext);
 }
 
@@ -129,11 +187,12 @@ Psh::OS::Win - Contains Windows specific code
 
 =head1 DESCRIPTION
 
-TBD
+An implementation of Psh::OS for Win32 systems. This module
+requires libwin32.
 
 =head1 AUTHOR
 
-blaaa
+Markus Peter, warp@spin.de
 Omer Shenker, oshenker@iname.com
 
 =head1 SEE ALSO

@@ -2,11 +2,7 @@
 #
 # psh - Perl Shell
 #
-# TODO: The background symbol & is currently handled in a hackish way
-# in three different places in this file. Could these be unified/made
-# less of a hack?
-#
-# Copyright (C) 1999 Gregor N. Purdy. All rights reserved.
+# Copyright (C) 1999-2000 Gregor N. Purdy. All rights reserved.
 # This script is free software. It may be copied or modified according
 # to the same terms as Perl itself.
 #
@@ -21,7 +17,7 @@ use Getopt::Std;
 
 use vars qw($VERSION %opt);
 
-$VERSION='0.005';
+$VERSION='0.006';
 
 #
 # Parse the command line and deal with the options except -r, which is
@@ -71,6 +67,29 @@ if (@ARGV) {
 		Psh::handle_message($@,'main_loop');
     }
 }
+
+END {	# try and write the history no matter how we exit
+	if ($Psh::save_history && !$Psh::readline_saves_history) {
+		my $fhist = new FileHandle($Psh::history_file, 'a');
+		if (defined($fhist)) {
+			eval { flock($fhist, LOCK_EX); };
+			if( @Psh::history>$Psh::history_length) {
+				splice(@Psh::history,0,@Psh::history-$Psh::history_length);
+			}
+			foreach (@Psh::history) {
+				$fhist->print("$_\n");
+			}
+			eval { flock($fhist, LOCK_UN); };
+			$fhist->close();
+		}
+	}
+}
+
+
+END {	# restore the old $ENV{SHELL}
+	$ENV{SHELL} = $Psh::old_shell if $Psh::old_shell;
+}
+
 
 exit 0;
 

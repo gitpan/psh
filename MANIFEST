@@ -1,9 +1,10 @@
 pshrc
-CHANGES
 CHANGES.pod
 COPYRIGHT
 INSTALL
+INSTALL.win32
 MANIFEST
+HACKING
 Makefile.PL
 README
 RELEASE
@@ -11,7 +12,7 @@ TODO
 psh
 psh.NEWS
 psh.pod
-test.pl
+tryme
 lib/Psh.pm
 lib/Psh/Job.pm
 lib/Psh/Joblist.pm
@@ -24,6 +25,8 @@ lib/Psh/Locale/Italian.pm
 lib/Psh/Locale/Portuguese.pm
 lib/Psh/Locale/Spanish.pm
 lib/Psh/Parser.pm
+lib/Psh/PerlEval.pm
+lib/Psh/Prompt.pm
 lib/Psh/Util.pm
 lib/Psh/Builtins.pm
 lib/Psh/OS.pm
@@ -32,3 +35,5 @@ lib/Psh/OS/Unix.pm
 lib/Psh/OS/Win.pm
 t/locale.t
 t/parser.t
+t/unix.psh
+t/win32.psh

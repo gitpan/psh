@@ -5,7 +5,7 @@ use vars qw($VERSION);
 
 use Psh::Job;
 
-$VERSION = do { my @r = (q$Revision: 1.5 $ =~ /\d+/g); sprintf "%d."."%02d" x $#r, @r }; # must be all one line, for MakeMaker
+$VERSION = do { my @r = (q$Revision: 1.6 $ =~ /\d+/g); sprintf "%d."."%02d" x $#r, @r }; # must be all one line, for MakeMaker
 
 sub new {
 	my $class = shift;
@@ -118,7 +118,7 @@ __END__
 
 =head1 NAME
 
-Psh::Joblist - A data structure suitable for handling job lists like bash´s
+Psh::Joblist - A data structure suitable for handling job lists like bash's
 
 =head1 SYNOPSIS
 

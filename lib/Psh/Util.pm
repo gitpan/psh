@@ -3,14 +3,14 @@ package Psh::Util;
 use strict;
 use vars qw($VERSION @ISA @EXPORT @EXPORT_OK %EXPORT_TAGS);
 
-use Cwd;
-use Cwd 'chdir';
+use Cwd qw(:DEFAULT chdir);
 use Config;
 use Psh::OS;
+use File::Spec;
 
 require Exporter;
 
-$VERSION = do { my @r = (q$Revision: 1.16 $ =~ /\d+/g); sprintf "%d."."%02d" x $#r, @r }; # must be all one line, for MakeMaker
+$VERSION = do { my @r = (q$Revision: 1.20 $ =~ /\d+/g); sprintf "%d."."%02d" x $#r, @r }; # must be all one line, for MakeMaker
 
 @ISA= qw(Exporter);
 
@@ -51,7 +51,7 @@ sub print_error
 sub _print_i18n
 {
 	my( $stream, $text, @rest) = @_;
-	$text= $Psh::text{$text};
+	$text= $Psh::text{$text} || '';
 	# This was looping over 0 and 1 and replacing %0 and %1
 	for( my $i=1; $i<=@rest; $i++)
 	{
@@ -119,7 +119,6 @@ sub print_list
 
 sub basic_abs_path {
 	my $dir = shift;
-	my $FS= $Psh::OS::FILE_SEPARATOR;
 	
 	$dir = '~' unless defined $dir and $dir ne '';
 	
@@ -128,15 +127,13 @@ sub basic_abs_path {
 		my $rest = $3;
 		
 		my $home;
-		
-		if ($user eq '') { $home = $ENV{HOME}; }
-		else             { $home = Psh::OS::get_home_dir($user); }
-		
+
+		$home= Psh::OS::get_home_dir($user);
 		if ($home) { $dir = "$home$rest"; } # If user's home not found, leave it alone.
 	}
 
-	if( !Psh::OS::is_path_absolute($dir)) {
-		$dir = cwd . $FS. $dir
+	if( !File::Spec->file_name_is_absolute($dir)) {
+		$dir = File::Spec->catdir(cwd,$dir);
 	}
 	
 	return $dir;
@@ -152,7 +149,6 @@ sub basic_abs_path {
 eval "use Cwd 'fast_abs_path';";
 if (!$@) {
 	print_debug("Using &Cwd::fast_abs_path()\n");
-#	sub abs_path { return fast_abs_path(@_); }
 	*abs_path = sub {
 	    my $path= eval { &fast_abs_path(@_); };
 		$path= eval { &basic_abs_path(@_) } if( $@);
@@ -188,12 +184,12 @@ if (!$@) {
 		my $cmd      = shift;
 		my $FS= $Psh::OS::FILE_SEPARATOR;
 
-		print_debug("[which $cmd]\n");
+		#print_debug("[which $cmd]\n");
 
 		if ($cmd =~ m|\Q$FS\E|) {
 			$cmd =~ m|^(.*)\Q$FS\E([^\Q$FS\E]+)$|;
 			my $path_element= $1;
-			my $cmd_element= $2;
+			my $cmd_element= $2||'';
 			my $try = abs_path($path_element).$FS.$cmd_element;
 			if ((-x $try) and (! -d _)) { return $try; }
 			return undef;
@@ -223,7 +219,7 @@ if (!$@) {
 		my @path_extension=Psh::OS::get_path_extension();
 
 		foreach my $dir (@Psh::absed_path) {
-			my $try = $dir.$FS.$cmd;
+			my $try = File::Spec->catfile($dir,$cmd);
 			foreach my $ext (@path_extension) {
 				if ((-x $try.$ext) and (!-d _)) { 
 					$hashed_cmd{$cmd} = $try.$ext;

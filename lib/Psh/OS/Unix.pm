@@ -2,14 +2,22 @@ package Psh::OS::Unix;
 
 use strict;
 use vars qw($VERSION);
-use POSIX qw(:sys_wait_h tcsetpgrp getpid setpgid);
+use POSIX qw(:sys_wait_h tcsetpgrp setpgid);
 use Config;
+use File::Spec;
+use Sys::Hostname;
+use FileHandle;
+use User::pwent;
+
 use Psh::Util ':all';
 
-$VERSION = do { my @r = (q$Revision: 1.18 $ =~ /\d+/g); sprintf "%d."."%02d" x $#r, @r }; # must be all one line, for MakeMaker
+$VERSION = do { my @r = (q$Revision: 1.31 $ =~ /\d+/g); sprintf "%d."."%02d" x $#r, @r }; # must be all one line, for MakeMaker
 
 $Psh::OS::PATH_SEPARATOR=':';
 $Psh::OS::FILE_SEPARATOR='/';
+
+$Psh::rc_file = ".pshrc";
+$Psh::history_file = ".psh_history";
 
 #
 # Returns the hostname of the machine psh is running on, preferrably
@@ -17,18 +25,19 @@ $Psh::OS::FILE_SEPARATOR='/';
 #
 
 sub get_hostname() {
-	return qx(hostname);
+	return hostname;
 }
 
 #
 # Returns a list of well-known hosts (from /etc/hosts)
 #
-sub get_known_hosts { 
-	open(FILE,"< /etc/hosts") || return ();
-	my $text='';
-	while( <FILE>) { $text.=$_; }
-	close(FILE);
-	return Psh::Util::parse_hosts_file($text);
+sub get_known_hosts {
+	my $hosts_file = "/etc/hosts"; # TODO: shouldn't be hard-coded?
+	my $hfh = new FileHandle($hosts_file, 'r');
+	return ("localhost") unless defined($hfh);
+	my $hosts_text = join('', <$hfh>);
+	$hfh->close();
+	return Psh::Util::parse_hosts_file($hosts_text);
 }
 
 #
@@ -36,44 +45,11 @@ sub get_known_hosts {
 #
 sub get_all_users {
 	my @result= ();
-	setpwent;
-	while( my ($name)= getpwent) {
+	CORE::setpwent;
+	while (my ($name) = CORE::getpwent) {
 		push(@result,'~'.$name);
 	}
-	endpwent;
-	return @result;
-}
-
-#
-# The Perl builtin glob STILL uses csh... so I guess this
-# is faster
-#
-sub glob {
-	my( $pattern, $dir) = @_;
-	my @result;
-	if( !$dir) {
-		$dir=$ENV{PWD};
-	} else {
-		$dir=abs_path($dir);
-	}
-	if( $pattern=~ m:/:) {
-		# Too difficult to simulate
-		my $old=$ENV{PWD};
-		chdir $dir;
-		@result= glob($pattern);
-		chdir $old;
-	} else {
-		# The fast variant for simple matches
-		$pattern=~s/\\/\\\\/g;
-		$pattern=~s/\./\\./g;
-		$pattern=~s/\*/.*/g;
-		$pattern=~s/\?/./g;
-		$pattern='[^\.]'.$pattern if( substr($pattern,0,2) eq '.*');
-		
-		opendir( DIR, $dir) || return ();
-		@result= grep { /^$pattern$/ } readdir(DIR);
-		closedir( DIR);
-	}
+	CORE::endpwent;
 	return @result;
 }
 
@@ -92,11 +68,9 @@ sub display_pod {
 		use Pod::Text;
 		Pod::Text::pod2text($tmp,*STDOUT);
 	};
-	if( $@) {
-		print $text;
-	}
+	print $text if $@;
 
-	1 while unlink($tmp); #Possibly pointless VMSism
+	unlink($tmp);
 }
 
 #
@@ -104,23 +78,35 @@ sub display_pod {
 # MacOS
 #
 sub exit() {
-	CORE::exit( shift);
+        CORE::exit($_[0]) if $_[0];
+        CORE::exit(0);
 }
-
-sub PATH_SEPARATOR { return ':'; }
-sub FILE_SEPARATOR { return '/'; }
 
 sub get_home_dir {
-	return (getpwnam(shift))[7]
-}
-
-sub is_path_absolute {
-	my $path= shift;
-
-	return substr($path,0,1)='/';
+	my $user = shift || $ENV{USER};
+	return $ENV{HOME} if ((! $user) && (-d $ENV{HOME}));
+	return getpwnam($user)->dir;
 }
 
 sub get_path_extension { return (''); }
+
+#
+# int inc_shlvl ()
+#
+# Increments $ENV{SHLVL}. Also checks for login shell status and does
+# appropriate OS-specific tasks depending on it.
+#
+sub inc_shlvl {
+	my $ruid_pwent = getpwuid($<);
+	if ((! $ENV{SHLVL}) && ($ruid_pwent->shell eq $0)) { # would use $Psh::bin, but login shells are guaranteed full paths
+		$Psh::login_shell = 1;
+		$ENV{SHLVL} = 1;
+	} else {
+		$Psh::login_shell = 0;
+		$ENV{SHLVL}++;
+	}
+}
+
 
 ###################################################################
 # JOB CONTROL
@@ -128,34 +114,28 @@ sub get_path_extension { return (''); }
 
 
 #
-# void _give_terminal_to (int PID) 
+# void _give_terminal_to (int PID)
 #
 # Make pid the foreground process of the terminal controlling STDIN.
 #
 
 sub _give_terminal_to
 {
-	# Why are the signal handlers changed for this method only ?!?
+	# If a fork of a psh fork tries to call this then exit
+	# as it would probably mess up the shell
+	# This hack is necessary as e.g.
+	# alias ls=/bin/ls
+	# ls &
+	# call fork_process from within a fork
 
-        # Current answer by gtw: I put these signal-handler changes in
-        # here. It's the last bit of "magic" I copied from
-        # bash-2.03/jobs.c . I don't know why it's necessary, I just
-        # know that job control was erratic, sometimes causing hangs
-        # when foreground children terminated, until I changed these
-        # signal handlers. This whole function is closely modeled on
-        # the function by the same name in bash-2.03/jobs.c .
+	return if $Psh::OS::Unix::forked_already;
 
 	local $SIG{TSTP}  = 'IGNORE';
 	local $SIG{TTIN}  = 'IGNORE';
 	local $SIG{TTOU}  = 'IGNORE';
 	local $SIG{CHLD}  = 'IGNORE';
 
-	#
-	# Perl will always complain about the tcsetpgrp if warnings
-	# are enabled... so we switch it off here
-	# TODO: Find out if really something is wrong with this line
-	local $^W=0;
-	tcsetpgrp(*STDIN,$_[0]);
+	tcsetpgrp(fileno STDIN,$_[0]);
 }
 
 
@@ -177,19 +157,21 @@ sub _wait_for_system
 
 	my $job= $Psh::joblist->get_job($pid);
 
+	return if ! $job;
+
+	my $term_pid= $job->{pgrp_leader}||$pid;
+
 	while (1) {
-		print_debug("[[About to give the terminal to $pid.]]\n");
-		_give_terminal_to($pid);
+		_give_terminal_to($term_pid);
 		if (!$job->{running}) { $job->continue; }
 		my $returnpid;
 		{
 			local $Psh::currently_active = $pid;
-			$returnpid = waitpid($pid, &WUNTRACED);
+			$returnpid = waitpid($pid,&WUNTRACED);
 			$pid_status = $?;
 		}
 		_give_terminal_to($psh_pgrp);
-		print_debug("[[Just gave myself back the terminal. $pid $returnpid $pid_status]]\n");
-		last if $returnpid<0;
+		last if $returnpid<1;
 		_handle_wait_status($returnpid, $pid_status, $quiet);
 		last if $returnpid == $pid;
 	}
@@ -209,21 +191,21 @@ sub _handle_wait_status {
 	my $command = $job->{call};
 	my $visindex= $Psh::joblist->get_job_number($pid);
 	my $verb='';
-  
+
 	if (&WIFEXITED($pid_status)) {
 		$verb= "\u$Psh::text{done}" if (!$quiet);
 		$Psh::joblist->delete_job($pid);
 	} elsif (&WIFSIGNALED($pid_status)) {
 		$verb = "\u$Psh::text{terminated} (" .
-			Psh::signal_description(WTERMSIG($pid_status)) . ')';
+			Psh::OS::signal_description(WTERMSIG($pid_status)) . ')';
 		$Psh::joblist->delete_job($pid);
 	} elsif (&WIFSTOPPED($pid_status)) {
 		$verb = "\u$Psh::text{stopped} (" .
-			Psh::signal_description(WSTOPSIG($pid_status)) . ')';
+			Psh::OS::signal_description(WSTOPSIG($pid_status)) . ')';
 		$job->{running}= 0;
 	}
-	if ($verb) {
-		print_out( "[$visindex] $verb $pid $command\n");
+	if ($verb && $visindex>0) {
+		Psh::Util::print_out( "[$visindex] $verb $pid $command\n");
 	}
 }
 
@@ -242,36 +224,187 @@ sub reap_children
 	}
 }
 
-#
-# void fork_process( code|program, int fgflag)
-#
+sub execute_complex_command {
+	my @array= @{shift()};
+	my $fgflag= shift @array;
+	my @return_val;
+	my $eval_thingie;
+	my $pgrp_leader= 0;
+	my $pid;
+	my $string='';
+	my @tmp;
 
-sub fork_process {
-	local( $Psh::code, $Psh::fgflag, $Psh::string) = @_;
-	local $Psh::pid;
+	for( my $i=0; $i<@array; $i++) {
+		my ($coderef, $how, $options, $words, $strat, $text)= @{$array[$i]};
+		$text||='';
 
-	unless ($Psh::pid = fork) { #child
-		open(STDIN,"-");
-		open(STDOUT,">-");
-		open(STDERR,">&STDERR");
-		remove_signal_handlers();
-		setpgid(getpid(),getpid());
-		Psh::OS::_give_terminal_to(getpid()) if $Psh::fgflag;
-		if( ref($Psh::code) eq 'CODE') {
-			&{$Psh::code};
+		my $line= join(' ',@$words);
+		($eval_thingie,@return_val)= &$coderef( \$line, $words,$how,$i>0);
+
+		if( defined($eval_thingie)) {
+			if( $#array) {
+				pipe READ,WRITE;
+			}
+			if( $i>0) {
+				unshift(@$options,['REDIRECT','<&',0,'INPUT']);
+			}
+			if( $i<$#array) {
+				unshift(@$options,['REDIRECT','>&',1,'WRITE']);
+			}
+			my $termflag=!($i==$#array);
+
+			($pid,@tmp)= _fork_process($eval_thingie,$fgflag,$text,$options,
+									   $pgrp_leader,$termflag);
+
+			if( !$i && !$pgrp_leader) {
+				$pgrp_leader=$pid;
+			}
+
+			if( $i<$#array && $#array) {
+				close(WRITE);
+				open(INPUT,"<&READ");
+			}
+			if( @return_val < 1 ||
+				!defined($return_val[0])) {
+				@return_val= @tmp;
+			}
+		}
+		$string.='|' if $i>0;
+		$string.=$text;
+	}
+
+	if( $pid) {
+		my $job= $Psh::joblist->create_job($pid,$string);
+		$job->{pgrp_leader}=$pgrp_leader;
+		if( $fgflag) {
+			_wait_for_system($pid, 1);
 		} else {
-			{ exec $Psh::code; } # Avoid unreachable warning
-			print_error_i18n(`exec_failed`,$Psh::code);
-			&exit(-1); #use the subroutine in this module
+			my $visindex= $Psh::joblist->get_job_number($job->{pid});
+			Psh::Util::print_out("[$visindex] Background $pgrp_leader $string\n");
 		}
 	}
-	setpgid($Psh::pid,$Psh::pid);
-	local $Psh::job= $Psh::joblist->create_job($Psh::pid,$Psh::string);
-	if( !$Psh::fgflag) {
-		my $visindex= $Psh::joblist->get_job_number($Psh::job->{pid});
-		print_out("[$visindex] Background $Psh::pid $Psh::string\n");
+	return @return_val;
+}
+
+sub _setup_redirects {
+	my $options= shift;
+
+	return [] if ref $options ne 'ARRAY';
+
+	my @cache=();
+	foreach my $option (@$options) {
+		if( $option->[0] eq 'REDIRECT') {
+			my $file= $option->[1].$option->[3];
+			my $type= $option->[2];
+
+			if( $type==0) {
+				open(OLDIN,"<&STDIN");
+				open(STDIN,$file);
+				select(STDIN);
+				$|=1;
+				if( $file eq '<&INPUT') {
+					close(INPUT);
+					# Just to get rid of the warning
+				}
+			} elsif( $type==1) {
+				open(OLDOUT,">&STDOUT");
+				open(STDOUT,$file);
+				select(STDOUT);
+				$|=1;
+			} elsif( $type==2) {
+				open(OLDERR,">&STDERR");
+				open(STDERR,$file);
+				select(STDERR);
+				$|=1;
+			}
+			push @cache, $type;
+		}
 	}
-	_wait_for_system($Psh::pid, 1) if $Psh::fgflag;
+	select(STDOUT);
+	return \@cache;
+}
+
+sub _remove_redirects {
+	my $cache= shift;
+
+	foreach my $type (@$cache) {
+		if( $type==0) {
+			close(STDIN);
+			open(STDIN,"<&OLDIN");
+			close(OLDIN);
+		} elsif( $type==1) {
+			close(STDOUT);
+			open(STDOUT,">&OLDOUT");
+			close(OLDOUT);
+		} elsif( $type==2) {
+			close(STDERR);
+			open(STDERR,">&OLDERR");
+			close(OLDERR);
+		}
+	}
+}
+
+#
+# void fork_process( code|program, int fgflag, text to display in jobs,
+#                    pid of pgroupleader, set terminal flag)
+#
+
+sub _fork_process {
+    my( $code, $fgflag, $string, $options,
+		$pgrp_leader, $termflag) = @_;
+	my($pid);
+
+	# HACK - if it's foreground code AND perl code
+	# we do not fork, otherwise we'll never get
+	# the result value, changed variables etc.
+	if( $fgflag && ref($code) eq 'CODE') {
+		my $cache= _setup_redirects($options);
+		my @result= eval { &$code };
+		_remove_redirects($cache);
+		Psh::Util::print_error($@) if $@;
+		return (0,@result);
+	}
+
+	unless ($pid = fork) { #child
+		$Psh::OS::Unix::forked_already=1;
+		close(READ) if( $pgrp_leader);
+		_setup_redirects($options);
+		remove_signal_handlers();
+		setpgid(0,$pgrp_leader||$$);
+		_give_terminal_to($$) if $fgflag && !$termflag;
+
+		if( ref($code) eq 'CODE') {
+			&{$code};
+			&exit(0);
+		} else {
+			my @words= map { Psh::Parser::unquote($_) }
+			            split ' ',$code;
+			{
+				if( ! ref $options) {
+					exec $code;
+				} else {
+					exec { $words[0] } @words;
+				}
+			} # Avoid unreachable warning
+			Psh::Util::print_error_i18n(`exec_failed`,$code);
+			&exit(-1);
+		}
+	}
+	setpgid($pid,$pgrp_leader||$pid);
+	return ($pid,undef);
+}
+
+sub fork_process {
+    my( $code, $fgflag, $string, $options) = @_;
+	my ($pid,@result)= _fork_process($code,$fgflag,$string,$options);
+	return @result if !$pid;
+	my $job= $Psh::joblist->create_job($pid,$string);
+	if( !$fgflag) {
+		my $visindex= $Psh::joblist->get_job_number($job->{pid});
+		Psh::Util::print_out("[$visindex] Background $pid $string\n");
+	}
+	_wait_for_system($pid, 1) if $fgflag;
+	return undef;
 }
 
 #
@@ -302,7 +435,7 @@ sub restart_job
 			  return;
 			}
 			my $visindex = $Psh::joblist->get_job_number($pid);
-			print_out("[$visindex] $verb $pid $command\n");
+			Psh::Util::print_out("[$visindex] $verb $pid $command\n");
 
 			if($fg_flag) {
 				eval { _wait_for_system($pid, 0); };
@@ -314,7 +447,7 @@ sub restart_job
 }
 
 # Simply doing backtick eval - mainly for Prompt evaluation
-sub system {
+sub backtick {
 	return `@_`;
 }
 
@@ -329,8 +462,11 @@ sub system {
 my %special_handlers= (
 					   'CHLD' => \&_ignore_handler,
 					   'CLD'  => \&_ignore_handler,
+					   'TTOU' => \&_ttou_handler,
+					   'TTIN' => \&_ttou_handler,
 					   'SEGV' => 0,
 					   'WINCH'=> 0,
+					   'ZERO' => 0,
 					   );
 
 # Fetching the signal names from Config instead of from %SIG
@@ -424,6 +560,11 @@ sub _readline_handler
     die "SECRET $Psh::bin: Signal $sig\n"; # changed to SECRET... just in case
 }
 
+sub _ttou_handler
+{
+	_give_terminal_to($$);
+}
+
 #
 # void _signal_handler( string SIGNAL )
 #
@@ -431,17 +572,18 @@ sub _readline_handler
 sub _signal_handler
 {
 	my ($sig) = @_;
-	
+
 	if ($Psh::currently_active > 0) {
-		print_debug("Received signal SIG$sig, sending to $Psh::currently_active\n");
+		Psh::Util::print_debug("Received signal SIG$sig, sending to $Psh::currently_active\n");
 
-		kill $sig, $Psh::currently_active;
+		kill $sig, -$Psh::currently_active;
 	} elsif ($Psh::currently_active < 0) {
-		print_debug("Received signal SIG$sig, sending to Perl code\n");
-
+		Psh::Util::print_debug("Received signal SIG$sig, sending to Perl code\n");
 		die "SECRET ${Psh::bin}: Signal $sig\n";
 	} else {
-		print_debug("Received signal SIG$sig, die-ing\n");
+		_give_terminal_to($$);
+		Psh::Util::print_debug("Received signal SIG$sig, die-ing\n");
+		die "SECRET ${Psh::bin}: Signal $sig\n" if $sig eq 'INT';
 	}
 
 	$SIG{$sig} = \&_signal_handler;
@@ -465,9 +607,9 @@ sub _ignore_handler
 sub _error_handler
 {
 	my ($sig) = @_;
-	print_error("Received SIG$sig - ignoring\n");
+	Psh::Util::print_error_i18n('unix_received_strange_sig',$sig);
 	$SIG{$sig} = \&_error_handler;
-	kill 'INT',getpid(); # HACK to stop a possible endless loop!
+	kill 'INT', $$; # HACK to stop a possible endless loop!
 }
 
 #
@@ -488,29 +630,6 @@ sub _resize_handler
 			($cols,$rows)= &Term::ReadKey::GetTerminalSize(*STDOUT);
 		};
 	}
-
-
-# I do not really want to activate this before I know more about
-# where this will work
-#
-#  	unless( $cols) {
-#  		#
-#  		# Portability alarm!! :-)
-#  		#
-#  		eval 'use "ioctl.ph';
-#  		eval 'use "sys/ioctl.ph';
-#  		eval 'use "sgtty.ph';
-#		
-#  		eval {
-#  			my $TIOCGWINSZ = &TIOCGWINSZ if defined(&TIOCGWINSZ);
-#  			my $TIOCGWINSZ = 0x40087468 if !defined($TIOCGWINSZ);
-#  			my $winsz_t="S S S S";
-#  			my $winsize= pack($winsz_t,0,0,0,0);
-#  			if( ioctl(STDIN,$TIOCGWINSZ,$winsize)) {
-#  				($rows,$cols)= unpack("S S S S",$winsize);
-#  			}
-#  		}
-#  	}
 
 	if(($cols > 0) && ($rows > 0)) {
 		$ENV{COLUMNS} = $cols;
