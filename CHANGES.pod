@@ -20,6 +20,233 @@ A reverse-chronological ordered list of changes
 ###############################################################################
 ###############################################################################
 ##
+## CVS
+##
+###############################################################################
+###############################################################################
+
+=head1 1.0 [2003-01-02]
+
+=head2 New Features
+
+=over 4
+
+=item *
+
+The new B<if> builtin allows mixing evaluation strategies. Example:
+
+   if ( -r 'README' ) {
+       if ( grep -q "Perl Shell" README ) {
+           print "OK\n";
+       }
+   }
+
+=item *
+
+New B<forfile> builtin:
+
+   forfile *.txt less $_
+
+is equivalent to
+
+   for i in *; do less $i; done
+
+in (ba)sh
+
+=item *
+
+New redirection and piping syntax - incompatible to the old sh-like
+syntax. The new syntax is allowing many nice things like redirecting
+to opened Perl filehandles ( command >[=FILEHANDLE])
+
+=item *
+
+Perl shell now integrates with Perl backticks, you you can finally do
+things like:
+
+   $foo=`help strategy`
+   chomp $foo
+   if ( $foo =~ /.../ ) ...
+
+=item * 
+
+New B<-F> command line switch to disable processing of any pshrc files
+
+=item *
+
+New default strategy B<perl> - send everything after 'p!' unparsed to the
+perl interpreter (might be used later on for a special rc file compiler)
+
+=item *
+
+New strategy B<darwin_apps> - tries to locate Darwin/Mac OS X
+Appbundle programs and execute them.
+
+=item *
+
+Alias expansion is escapable using backslash:
+  alias ls='ls --color'
+  \ls
+
+=item *
+
+The sequence ESC-h is now per default bound to the new readline function
+"run-help" which will display any help about the current input line it
+can find. (works only in Term::ReadLine::Gnu)
+
+=item *
+
+It's now possible to bind simple commands with C<&&> and C<||> like
+in a normal shell.
+
+=item *
+
+Global precommand modifiers: You can put B<noglob>, B<noalias>, B<noexpand> in
+front of any command to disable the specified expansion or all of them.
+
+=item *
+
+Prompt themes - see the B<theme> builtin.
+
+=item *
+
+Completion modules - allows large sets of predefined completion rules
+without loading them all at startup time - see the B<complete> builtin.
+
+=back
+
+=head2 New/enhanced builtins
+
+=over 4
+
+=item * B<modules>
+
+=item * B<ulimit>
+
+=item * B<printenv>
+
+=item * B<hash>
+
+=item * B<rehash>
+
+=item * B<jobs> has new flags B<-rsp>
+
+=item * B<fc> has protection against endless loops and a more sensible range parsing
+
+=item * B<which> largely extended with flags B<-mrav>
+
+=item * B<package> for switching Perl namespace
+
+=item *
+
+Added a sudo builtin which adds some capabilities to the sudo command.
+(Michael Graham)
+
+=back
+
+=head2 Fixes
+
+=over 4
+
+=item *
+
+Major startup speedup
+
+=item *
+
+There was a small, not very often occurring bug related to the usage of
+Env::Array, due to a typo
+
+=item *
+
+Handling of ~ for username expansion should be bug-free now
+
+=item *
+
+The help builtin sometimes returned the wrong help (e.g. C<help set>
+returned the help of setenv)
+
+=item *
+
+The parser parsed '&&' as if the user entered '& &&'.
+
+=item *
+
+C<@_> and C<$_> are saved between input lines.
+
+=item *
+
+If you're redirecting perl code, a new fork will be created. You'll therefore
+lose all variable changes etc. in redirected perl code. That's not as bad as
+it seems, as before the change, psh segfaulted most of the time you tried
+redirecting perl code.
+
+=item *
+
+Completion was a improved a bit - completions of filenames like "foo\ bar"
+(where backslash is used to escape whitespace) works a little bit better
+now. A complete rewrite of Completion is currently scheduled for 0.11
+
+=back
+
+=head2 Cleanups
+
+=over 4
+
+=item *
+
+The package Psh::Job is now in the same file with Psh::Joblist. Psh::Job
+stays an object while Psh::Joblist was converted to a procedural interface
+as there was no need for OO here.
+
+=item *
+
+The package Psh::Locale::Base was renamed to Psh::Locale, so the Psh::Locale::
+tree now only contains valid locales.
+
+=item *
+
+Many configuration variables have been removed. Please see README.upgrade and the new B<option> builtin. Tieable options by Michael Graham.
+
+=item *
+
+Switch to new evaluation strategies system. Please also see README.upgrade
+
+=item *
+
+The builtin B<pshtokenize> was removed as it duplicated code from the
+B<debug> strategy.
+
+=item *
+
+The builtin B<which> more conforms to the 'standard' which - it will only
+locate an executable by default. Strategy B<debug> is similar to the old
+function of B<which>. B<which> knows some toggles tough for more advanced
+searches.
+
+=back
+
+=head2 Other changes
+
+=over 4
+
+=item *
+
+The comment strategy was removed. Comments are now already recognized and
+ignored by the parser.
+
+=item *
+
+A limited version of the B<perlfunc> strategy is now loaded by default.
+The old strategy B<perlfunc> was renamed to B<perlfunc_heavy>.
+
+=back
+
+=cut
+
+###############################################################################
+###############################################################################
+##
 ## 0.009
 ##
 ###############################################################################
@@ -47,7 +274,7 @@ B<psh> builtins on Unix.
 =item *
 
 Added new builtin B<fc> which is similar to the command of the same
-name from B<bash> - inspired by a command on the SourceForge
+name from B<bash> - inspired by a comment on the SourceForge
 message board (and I finally start to like this command ;-).
 - warp [2000-05-03]
 
@@ -159,6 +386,7 @@ Removed some errors and problems with Windows in prompt package.
 
 =back
 
+=cut
 
 ###############################################################################
 ###############################################################################

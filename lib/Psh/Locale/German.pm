@@ -1,10 +1,6 @@
 package Psh::Locale::German;
 
-use strict;
-use vars qw($VERSION);
 use locale;
-
-$VERSION = do { my @r = (q$Revision: 1.7 $ =~ /\d+/g); sprintf "%d."."%02d" x $#r, @r }; # must be all one line, for MakeMaker
 
 my %sig_description = (
 					   'TTOU' => 'Terminalausgabe',
@@ -99,24 +95,3 @@ no_libwin32=libwin32 Library benötigt (vorhanden als CPAN Bundle oder ausgeliefe
 
 # Psh::OS::Unix
 unix_received_strange_sig=Signal SIG%1 wurde empfangen - wird ignoriert
-
-__END__
-
-=head1 NAME
-
-Psh::Locale::German - containing translations for German locales
-
-=head1 SYNOPSIS
-
-
-=head1 DESCRIPTION
-
-
-=head1 AUTHOR
-
-Markus Peter, warp@spin.de
-
-=head1 SEE ALSO
-
-
-=cut

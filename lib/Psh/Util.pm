@@ -1,27 +1,11 @@
 package Psh::Util;
 
 use strict;
-use vars qw($VERSION @ISA @EXPORT @EXPORT_OK %EXPORT_TAGS);
 
-use Cwd;
-use Config;
-use Psh::OS;
-use File::Spec;
+require Psh::OS;
 
-require Exporter;
-
-$VERSION = do { my @r = (q$Revision: 1.26 $ =~ /\d+/g); sprintf "%d."."%02d" x $#r, @r }; # must be all one line, for MakeMaker
-
-@ISA= qw(Exporter);
-
-@EXPORT= qw( );
-@EXPORT_OK= qw( starts_with ends_with print_list);
-%EXPORT_TAGS = ( all => [qw(print_warning print_debug print_debug_class
-							print_warning_i18n print_error
-							print_out print_error_i18n print_out_i18n
-							which abs_path)] );
-
-Exporter::export_ok_tags('all'); # Add EXPORT_TAGS to EXPORT_OK
+%Psh::Util::command_hash=();
+%Psh::Util::path_hash=();
 
 sub print_warning
 {
@@ -42,8 +26,9 @@ sub print_debug
 sub print_debug_class
 {
 	my $class= shift;
-	print STDERR @_ if $Psh::debugging =~ /$class/ ||
-	  $Psh::debugging==1;
+	print STDERR @_ if $Psh::debugging and
+	  ($Psh::debugging eq '1' or
+	   $Psh::debugging =~ /$class/);
 }
 
 sub print_error
@@ -64,11 +49,11 @@ sub print_error
 sub _print_i18n
 {
 	my( $stream, $text, @rest) = @_;
-	$text= $Psh::text{$text} || '';
-	# This was looping over 0 and 1 and replacing %0 and %1
+	return unless $stream;
+	$text= Psh::Locale::get_text($text);
 	for( my $i=1; $i<=@rest; $i++)
 	{
-		$text=~ s/\%$i/$rest[$i-1]/g; # removed o from flags huggie
+		$text=~ s/\%$i/$rest[$i-1]/g;
 	}
 	print $stream $text;
 }
@@ -104,10 +89,18 @@ sub print_list
     ## find width of widest entry
     my $maxwidth = 0;
 	my $screen_width=$ENV{COLUMNS};
-    grep(length > $maxwidth && ($maxwidth = length), @list);
-    $maxwidth++;
 
-    $columns = $maxwidth >= $screen_width?1:int($screen_width / $maxwidth);
+	if (ref $list[0] and ref $list[0] eq 'ARRAY') {
+		$maxwidth= $list[1];
+		@list= @{$list[0]};
+	}
+
+	unless ($maxwidth) {
+		grep(length > $maxwidth && ($maxwidth = length), @list);
+	}
+	$maxwidth++;
+
+	$columns = $maxwidth >= $screen_width?1:int($screen_width / $maxwidth);
 
     ## if there's enough margin to interspurse among the columns, do so.
     $maxwidth += int(($screen_width % $maxwidth) / $columns);
@@ -118,59 +111,92 @@ sub print_list
     $mark = $#list - $lines;
     for (my $l = 0; $l < $lines; $l++) {
         for ($index = $l; $index <= $mark; $index += $lines) {
-            print_out(sprintf("%-$ {maxwidth}s", $list[$index]));
+			my $tmp= my $item= $list[$index];
+			$tmp=~ s/\001(.*?)\002//g;
+			$item=~s/\001//g;
+			$item=~s/\002//g;
+			my $diff= length($item)-length($tmp);
+			my $dispsize= $maxwidth+$diff;
+            print_out(sprintf("%-${dispsize}s", $item));
         }
-        print_out($list[$index]) if $index <= $#list;
+		if ($index<=$#list) {
+			my $item= $list[$index];
+			$item=~s/\001//g; $item=~s/\002//g;
+			print_out($item);
+		}
         print_out("\n");
     }
 }
 
-{
-	my $abs_path;
-
-	sub basic_abs_path {
-		my $dir = shift;
-		$dir = '~' unless defined $dir and $dir ne '';
-		if ($dir =~ m|^(~([a-zA-Z0-9-]*))(.*)$|) {
-			my $user = $2;
-			my $rest = $3;
-			my $home;
-
-			$home= Psh::OS::get_home_dir($user);
-			if ($home) { $dir = "$home$rest"; } # If user's home not found, leave it alone.
+sub abs_path {
+	my $dir= shift;
+	return undef unless $dir;
+	return $Psh::Util::path_hash{$dir} if $Psh::Util::path_hash{$dir};
+	my $result= Psh::OS::abs_path($dir);
+	unless ($result) {
+		if ($dir eq '~') {
+			$result= Psh::OS::get_home_dir();
+		} elsif ( substr($dir,0,2) eq '~/') {
+			substr($dir,0,1)= Psh::OS::get_home_dir();
+		} elsif ( substr($dir,0,1) eq '~' ) {
+			my $fs= $Psh::OS::FILE_SEPARATOR;
+			my ($user)= $dir=~/^\~(.*?)$fs/;
+			if ($user) {
+				substr($dir,0,length($user)+1)= Psh::OS::get_home_dir($user);
+			}
 		}
+		unless ($result) {
+			my $tmp= Psh::OS::rel2abs($dir,$ENV{PWD});
 
-		if( !File::Spec->file_name_is_absolute($dir)) {
-			$dir = File::Spec->catdir($ENV{PWD},$dir);
+			my $old= $ENV{PWD};
+			if ($tmp and -r $tmp) {
+				if (-d $tmp and -x _) {
+					if ( CORE::chdir($tmp)) {
+						$result = Psh::OS::getcwd_psh();
+						if (!CORE::chdir($old)) {
+						    print STDERR "Could not change directory back to $old!\n";
+						    CORE::chdir(Psh::OS::get_home_dir())
+						}
+					}
+				} else {
+					$result= $tmp;
+				}
+			}
+#  			if ($tmp and !$result) {
+#  				local $^W=0;
+#  				local $SIG{__WARN__}= {};
+#  				eval {
+#  					$result= Cwd::abs_path($tmp);
+#  				};
+#  				print_debug_class('e',"(abs_path) Error: $@") if $@;
+#  			}
+			return undef unless $result;
 		}
-		return $dir;
+		if ($result) {
+			$result.='/' unless $result=~ m:[/\\]:;  # abs_path strips / from letter: on Win
+		}
+	}
+	$Psh::Util::path_hash{$dir}= $result if Psh::OS::file_name_is_absolute($dir);
+	return $result;
+}
+
+sub recalc_absed_path {
+	@Psh::absed_path    = ();
+	%Psh::Util::command_hash    = ();
+
+	my @path = split($Psh::OS::PATH_SEPARATOR, $ENV{PATH});
+
+	eval {
+		foreach my $dir (@path) {
+			next unless $dir;
+			my $dir= Psh::Util::abs_path($dir);
+			next unless -r $dir and -x _;
+			push @Psh::absed_path, $dir;
+		}
 	};
-
-	#
-	# string abs_path(string DIRECTORY)
-	#
-	# expands the argument DIRECTORY into a full, absolute pathname.
-	#
-
-	eval "use Cwd 'fast_abs_path';";
-	if ($@) {
-		$abs_path=\&basic_abs_path;
-	} else {
-		$abs_path=\&fast_abs_path;
-	}
-
-	sub abs_path {
-		my $dir= shift;
-		my $dir2= Psh::OS::abs_path($dir);
-		unless ($dir2) {
-			eval {
-				$dir2= &$abs_path($dir);
-			};
-			$dir2= basic_abs_path($dir) if $@;
-			$dir2.='/' unless $dir2=~m:[/\\]:; # abs_path strips / from letter: on Win
-		}
-		return $dir2;
-	}
+	print_debug_class('e',"(recalc_absed_path) Error: $@") if $@;
+	# Without the eval Psh might crash if the directory
+	# does not exist
 }
 
 #
@@ -186,65 +212,66 @@ sub print_list
 	#
 
 	my $last_path_cwd = '';
-	my %hashed_cmd    = ();
 	my $FS=$Psh::OS::FILE_SEPARATOR;
-
-	my $re1="\Q$FS\E";
-	my $re2="^(.*)\Q$FS\E([^\Q$FS\E]+)\$";
+	my $tmp= quotemeta($FS);
+	my $re1="$tmp";
+	my $re2="^(.*)$tmp([^$tmp]+)\$";
 
 	if ($]>=5.005) {
 		eval {
-			$re1= qr{$re1};
-			$re2= qr{$re2};
-		}
+			$re1= qr{$re1}o;
+			$re2= qr{$re2}o;
+		};
+		print_debug_class('e',"(util::before which) Error: $@") if $@;
 	}
 
 	sub which
     {
-		my $cmd      = shift;
+		my $cmd= shift;
+		my $all= shift;
+		return undef unless $cmd;
 
-		if ($cmd =~ m|$re1|o) {
+
+		if ($cmd =~ m|$re1|o ) {
 			$cmd =~ m|$re2|o;
-			my $path_element= $1;
-			my $cmd_element= $2||'';
-			my $try = Psh::Util::abs_path($path_element).$FS.$cmd_element;
+			my $path_element= $1 || '';
+			my $cmd_element=  $2 || '';
+			return undef unless $path_element and $cmd_element;
+			$path_element=Psh::Util::abs_path($path_element);
+			return undef unless $path_element;
+			my $try= Psh::OS::catfile($path_element,$cmd_element);
 			if ((-x $try) and (! -d _)) { return $try; }
 			return undef;
 		}
 
-		# Only search for names which match a given regexp
+		return $Psh::Util::command_hash{$cmd} if exists $Psh::Util::command_hash{$cmd} and !$all;
+
 		if ($cmd !~ m/$Psh::which_regexp/) { return undef; }
 
 		if ($last_path_cwd ne ($ENV{PATH} . $ENV{PWD})) {
 			$last_path_cwd = $ENV{PATH} . $ENV{PWD};
-			@Psh::absed_path    = ();
-			%hashed_cmd    = ();
 
-			my @path = split($Psh::OS::PATH_SEPARATOR, $ENV{PATH});
-
-			eval {
-				foreach my $dir (@path) {
-					push @Psh::absed_path, Psh::Util::abs_path($dir);
-				}
-			};
-			# Without the eval Psh might crash if the directory
-			# does not exist
+			recalc_absed_path();
 		}
 
-		if (exists($hashed_cmd{$cmd})) { return $hashed_cmd{$cmd}; }
-
 		my @path_extension=Psh::OS::get_path_extension();
+		my @all=();
 
 		foreach my $dir (@Psh::absed_path) {
-			my $try = File::Spec->catfile($dir,$cmd);
+			next unless $dir;
+			my $try = Psh::OS::catfile($dir,$cmd);
 			foreach my $ext (@path_extension) {
-				if ((-x $try.$ext) and (!-d _)) { 
-					$hashed_cmd{$cmd} = $try.$ext;
-					return $try.$ext;
+				if ((-x $try.$ext) and (!-d _)) {
+					$Psh::Util::command_hash{$cmd} = $try.$ext unless $all;
+					return $try.$ext unless $all;
+					push @all, $try.$ext;
 				}
 			}
 		}
-		$hashed_cmd{$cmd} = undef;
+		if ($all and @all) {
+			return @all;
+		}
+		$Psh::Util::command_hash{$cmd} = undef; # no delete by purpose
 
 		return undef;
 	}
@@ -317,36 +344,4 @@ sub prompt {
 1;
 
 __END__
-
-=head1 NAME
-
-Psh::Utils - Containing certain Psh utility functions
-
-=head1 SYNOPSIS
-
-  use Psh::Utils (:all);
-
-=head1 DESCRIPTION
-
-TBD
-
-
-=head1 AUTHOR
-
-blaaa
-
-=head1 SEE ALSO
-
-=cut
-
-# The following is for Emacs - I hope it won't annoy anyone
-# but this could solve the problems with different tab widths etc
-#
-# Local Variables:
-# tab-width:4
-# indent-tabs-mode:t
-# c-basic-offset:4
-# perl-indent-level:4
-# End:
-
 

@@ -1,10 +1,9 @@
 package Psh::Locale::Italian;
 
 use strict;
-use vars qw($VERSION);
 use locale;
 
-$VERSION = do { my @r = (q$Revision: 1.1 $ =~ /\d+/g); sprintf "%d."."%02d" x $#r, @r }; # must be all one line, for MakeMaker
+$VERSION = do { my @r = (q$Revision: 1.3 $ =~ /\d+/g); sprintf "%d."."%02d" x $#r, @r }; # must be all one line, for MakeMaker
 
 BEGIN {
 	my %sig_description = (
@@ -54,24 +53,3 @@ EOT
 
 
 1;
-__END__
-
-=head1 NAME
-
-Psh::Locale::Italian - containing translations for Italian locale
-
-=head1 SYNOPSIS
-
-
-=head1 DESCRIPTION
-
-
-=head1 AUTHOR
-
-Gregor N. Purdy, gregor@focusresearch.com
-
-=head1 SEE ALSO
-
-
-=cut
-

@@ -1,6 +1,7 @@
 package Psh::Builtins::Bg;
 
-use Psh::Util ':all';
+require Psh::Util;
+require Psh::Joblist;
 
 =item * C<bg [%JOB|COMMAND]>
 
@@ -18,29 +19,28 @@ sub bi_bg
 	my $arg = shift;
 
 	if( ! Psh::OS::has_job_control()) {
-		print_error_i18n('no_jobcontrol');
-		return undef;
+		Psh::Util::print_error_i18n('no_jobcontrol');
+		return (0,undef);
 	}
 
 	if (!defined($arg) || $arg eq '') {
-		($arg)= $Psh::joblist->find_job();
+		($arg)= Psh::Joblist::find_job();
 	} else {
 		if( $arg !~ /^\%/) {
-			Psh::evl($arg.' &');
-			return undef;
+			return Psh::evl($arg.' &');
 		}
 		$arg =~ s/\%//;
 
 		if ( $arg !~ /^\d+$/) {
-			($arg)= $Psh::joblist->find_last_with_name($arg,0);
+			($arg)= Psh::Joblist::find_last_with_name($arg,0);
 		}
 		$arg-- if defined($arg);
 	}
-	return undef unless defined($arg);
+	return (0,undef) unless defined($arg);
 
 	Psh::OS::restart_job(0, $arg);
 
-	return undef;
+	return (1,undef);
 }
 
 1;

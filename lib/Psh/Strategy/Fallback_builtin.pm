@@ -10,28 +10,42 @@ shell, you can move this strategy ahead of executable.
 
 =cut
 
-$Psh::strategy_which{fallback_builtin}= sub {
-		my $fnname = ${$_[1]}[0];
-		
-		if( $Psh::fallback_builtin{$fnname}) {
-			eval 'use Psh::Builtins::Fallback::'.ucfirst($fnname);
-            return "(fallback built in $fnname)";
-        }
-		return '';
-};
+require Psh::Strategy;
 
+@Psh::Strategy::Fallback_builtin::ISA=('Psh::Strategy');
 
-$Psh::strategy_eval{fallback_builtin}= sub {
-		my $line= ${shift()};
-        my @words= @{shift()};
-        my $command= shift @words;
-        my $rest= join(' ',@words);
-        {
-	        no strict 'refs';
-	        $coderef= *{"Psh::Builtins::Fallback::".ucfirst($command)."::bi_$command"};
-            return (sub { &{$coderef}($rest,\@words); },[], 0, undef );
-        }
-};
+my %fallback_builtin = ('ls'=>1, 'env'=>1 );
 
+sub new { Psh::Strategy::new(@_) }
+
+sub consumes {
+	return Psh::Strategy::CONSUME_TOKENS;
+}
+
+sub runs_before {
+	return qw(executable);
+}
+
+sub applies {
+	my $fnname = ${$_[2]}[0];
+	if( $fallback_builtin{$fnname}) {
+		eval 'use Psh::Builtins::Fallback::'.ucfirst($fnname);
+		return $fnname;
+	}
+	return '';
+}
+
+sub execute {
+	my $self= shift;
+	my $line= ${shift()};
+	my @words= @{shift()};
+	my $command= shift;
+	shift @words;
+	my $rest= join(' ',@words);
+
+	no strict 'refs';
+	$coderef= *{"Psh::Builtins::Fallback::".ucfirst($command)."::bi_$command"};
+	return (1,sub { &{$coderef}($rest,\@words); },[], 0, undef );
+}
 
 1;

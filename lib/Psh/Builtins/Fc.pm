@@ -1,8 +1,9 @@
 package Psh::Builtins::Fc;
 
 use strict;
-use Psh::Util qw(:all starts_with);
-use Getopt::Std;
+require Psh;
+require Psh::Util;
+require Getopt::Std;
 
 =item * C<fc> -s [OLD=NEW] [command]
 
@@ -31,14 +32,14 @@ sub _locate_command {
 	if ($command) {
 		my $found;
 		for (my $i=$comnum; $i>=0; $i--) {
-			if (starts_with($Psh::history[$i],$command)) {
+			if (Psh::Util::starts_with($Psh::history[$i],$command)) {
 				$comnum=$i;
 				$found=1;
 				last;
 			}
 		}
 		unless ($found) {
-			print_error_i18n('bi_fc_notfound');
+			Psh::Util::print_error_i18n('bi_fc_notfound');
 			return undef;
 		}
 	}
@@ -49,15 +50,17 @@ sub bi_fc
 {
 	my $line= shift;
 	local @ARGV = @{shift()};
-	my $opt={};
-	getopts('splre:',$opt);
 
-	return undef unless $#Psh::history;
+	return (0,undef) unless $#Psh::history;
+
+	my $opt={};
+	Getopt::Std::getopts('splre:',$opt);
+
 	if ($opt->{'l'}) {
 		my $num=@Psh::history;
 		$num=15 if $num>15;
 		for (my $i=@Psh::history-$num; $i<@Psh::history; $i++) {
-			print_out(' '.sprintf('%3d',$i+1).'  '.$Psh::history[$i]."\n");
+			Psh::Util::print_out(' '.sprintf('%3d',$i+1).'  '.$Psh::history[$i]."\n");
 		}
 	} elsif ($opt->{'s'}) {
 		my $subst='';
@@ -70,52 +73,58 @@ sub bi_fc
 			$command.=$_;
 		}
 		my $comnum= _locate_command($command);
-		return undef unless defined $comnum;
+		return (0,undef) unless defined $comnum;
 		my $comtext=$Psh::history[$comnum];
 		if ($subst) {
 			my ($old,$new)=$subst=~/^(.*?[^\\])\=(.*)$/;
 			$comtext=~s/$old/$new/;
 		}
-		print_out($comtext."\n");
+		Psh::Util::print_out($comtext."\n");
 		Psh::add_history($comtext);
 		return Psh::evl($comtext);
 	} elsif ($opt->{'p'}) {
 		my $prepend= shift @ARGV;
 		my $command= join ' ',@ARGV;
 		my $comnum= _locate_command($command);
-		return undef unless defined $comnum;
+		return (0,undef) unless defined $comnum;
 		my $comtext="$prepend $Psh::history[$comnum]";
-		print_out($comtext."\n");
+		Psh::Util::print_out($comtext."\n");
 		Psh::add_history($comtext);
 		return Psh::evl($comtext);
 	} else {
-		my $file= Psh::OS::tmpnam();
-		my $editor= $opt->{e}||$ENV{FCEDIT}||$ENV{EDITOR}||'vi';
-		my $fh= new FileHandle("> $file");
-		my $from=my $to=$#Psh::history;
-		($from,$to)=$ARGV[0]=~/(\d+)-(\d+)/ if $ARGV[0]=~/-/;
-		for (my $i=$from; $i<=$to; $i++) {
-			print $fh $Psh::history[$i-1]."\n";
+		if (!$Psh::interactive) {
+			Psh::Util::print_error("fc: not running interactively - cancelled\n");
+			return (0,undef);
 		}
-		$fh->close();
+		my $file= Psh::OS::tmpnam();
+		my $editor= Psh::OS::get_editor($opt->{e} || $ENV{FCEDIT});
+		my $from=my $to=$#Psh::history;
+		if ($ARGV[0]=~/^\s*(\d+)-(\d+)/) {
+			($from,$to)=($1,$2);
+		} elsif ($ARGV[0]=~/^\s*(\d+)\s*$/) {
+			($from,$to)=($1,$1);
+		}
+		if ($from<0 or $to<0 or $from>$#Psh::history or
+		    $to>$#Psh::history) {
+			Psh::Util::print_error("fc: specified range not in history\n");
+			return (0,undef);
+		}
+
+		if (open(FILE,"> $file")) {
+			for (my $i=$from; $i<=$to; $i++) {
+				print FILE $Psh::history[$i-1]."\n";
+			}
+			close(FILE);
+		}
 		system("$editor $file");
 		Psh::process_file($file);
+		eval {
+			unlink($file);
+		};
 	}
-	return undef;
+	return (1,undef);
 }
 
 
 
 1;
-
-# Local Variables:
-# mode:perl
-# tab-width:4
-# indent-tabs-mode:t
-# c-basic-offset:4
-# perl-label-offset:0
-# perl-indent-level:4
-# cperl-indent-level:4
-# cperl-label-offset:0
-# End:
-

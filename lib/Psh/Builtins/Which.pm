@@ -1,68 +1,112 @@
 package Psh::Builtins::Which;
 
-use Psh::Util ':all';
+require Psh::Util;
+require Getopt::Std;
 
-=item * C<which COMMAND-LINE>
+=item * C<which command>
 
-Describe how B<psh> will execute the given COMMAND-LINE, under the
-current setting of C<$Psh::strategies>.
+Locates the command in the filesystem.
+
+=item * C<which -m module>
+
+Locates the perl module in the filesystem
+
+=item * C<which -r module>
+
+Locates a command using a Perl regexp
+
+Option C<-a> may be used to see more than one match.
+Option C<-v> switches to a more verbose output.
 
 =cut
 
+sub parse_version
+{
+	my $file= shift;
+	open(FILE,"< $file");
+	my $inpod=0;
+	my $result;
+	while (<FILE>) {
+		chomp;
+		$inpod = /^=(?!cut)/ ? 1: /^=cut/ ? 0 : $inpod;
+		next if $inpod;
+		next unless /([\$*])(([\w\:\']*)\bVERSION)\b.*\=/;
+		my $eval= qq{
+package Psh::_version;
+no strict;
+
+local $1$2;
+\$$2=undef; do {
+    $_
+}; \$$2
+};
+		no warnings;
+		$result= eval($eval);
+		last;
+	}
+	close(FILE);
+	$result = 'undef' unless defined $result;
+	return $result;
+}
+
 sub bi_which
 {
-	my $line   = shift;
+	my $line= shift;
+	local @ARGV = @{shift()};
+	my $opt={};
+	Getopt::Std::getopts('aprmv',$opt);
+	my $rest= join(' ',@ARGV);
 
-	if (!defined($line) or $line eq '') {
-		print_error_i18n('bi_which_no_command');
-		return 1;
-	}
-
-
-	print_debug("[which $line]\n");
-
-	my @words= Psh::Parser::std_tokenize($line);
-	foreach my $strat (@Psh::unparsed_strategies) {
-		if (!exists($Psh::strategy_which{$strat})) {
-			print_warning_i18n('no_such_strategy',$strat,'which');
-			next;
-		}
-
-		my $how = &{$Psh::strategy_which{$strat}}(\$line,\@words);
-
-		if ($how) {
-			if (ref $how eq 'ARRAY') {
-				$how=$how->[0]
+	if ($opt->{'m'}) { # perl module search
+        $rest=~ s/::/$Psh::OS::FILE_SEPARATOR/g;
+		my $foundsth=0;
+        foreach my $dir (@Psh::origINC) {
+			next unless $dir;
+            my $file= Psh::OS::catfile($dir,$rest.'.pm');
+            if (-r $file) {
+				Psh::Util::print_out($file);
+                if ($opt->{v}) {
+		            my $version= parse_version($file);
+					Psh::Util::print_out(" $version");
+				}
+		        Psh::Util::print_out("\n");
+				$foundsth=1;
+		        last unless $opt->{a};
+            }
+        }
+		return (1,undef) if $foundsth;
+	} else {
+		if ($opt->{'r'}) {
+			my $foundsth=0;
+			Psh::Util::recalc_absed_path();
+			foreach my $dir (@Psh::absed_path) {
+				next unless $dir;
+				opendir(DIR, $dir);
+				while (my $tmp= readdir(DIR)) {
+					next unless $tmp=~/$rest/;
+					$tmp= Psh::OS::catfile($dir,$tmp);
+					next unless -f $tmp;
+					next unless -x _;
+					Psh::Util::print_out("$tmp\n");
+					$foundsth=1;
+					last unless $opt->{a};
+				}
+				closedir(DIR);
+				last if $foundsth and !$opt->{a};
 			}
-			print_out_i18n('evaluates_under',$line,$strat,$how);
-			return 0;
+			return (1,undef) if $foundsth;
+		} else {
+			if ($rest) {
+				my @tmp=();
+				push @tmp, Psh::Util::which($rest,$opt->{'a'}?1:0);
+				foreach (@tmp) {
+					Psh::Util::print_out("$_\n");
+				}
+				return (1,undef) if @tmp;
+			}
 		}
 	}
-
-
-	my @words= Psh::Parser::decompose(
-							'(\s+|\||;|\&\d*|[0-9&]*>|[0-9&]*<|\\|=)',
-							$line, undef, 1,
-							{"'"=>"'","\""=>"\"","{"=>"}"});
-	# TODO: The special rules are missing so this is not really correct
-
-	my $line= join ' ', @words;
-	foreach my $strat (@Psh::strategies) {
-		if (!defined($Psh::strategy_which{$strat})) {
-			print_warning_i18n('no_such_strategy',$strat,'which');
-			next;
-		}
-
-		my $how = &{$Psh::strategy_which{$strat}}(\$line,\@words);
-
-		if ($how) {
-			print_out_i18n('evaluates_under',$line,$strat,$how);
-			return 0;
-		}
-	}
-
-	print_warning_i18n('clueless',$line,'which');
-	return 1;
+	return (0,undef);
 }
 
 1;

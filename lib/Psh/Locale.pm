@@ -1,12 +1,4 @@
-package Psh::Locale::Base;
-
-use strict;
-use vars qw($VERSION);
-use locale;
-
-use POSIX qw(strftime);
-
-$VERSION = do { my @r = (q$Revision: 1.10 $ =~ /\d+/g); sprintf "%d."."%02d" x $#r, @r }; # must be all one line, for MakeMaker
+package Psh::Locale;
 
 #
 # Here is the list of ISO-639:1988 language codes. Obtained from
@@ -175,7 +167,20 @@ $VERSION = do { my @r = (q$Revision: 1.10 $ =~ /\d+/g); sprintf "%d."."%02d" x $
 #  zu Zulu
 #
 
-my %alias_table= (
+my (@mon,@wday);
+my $locale_loaded;
+my $special_locale=0;
+
+sub load_locale {
+	return if $locale_loaded;
+	eval "require Psh::Locale::Default";
+
+	my $lang= $ENV{LANG};
+	# Now try to use a locale module depending on LANG
+	if( $lang and $lang ne "C" and $lang ne "POSIX") {
+		$lang=lc($lang);
+
+		my %alias_table= (
 				  "de_de"     => "German",
 				  "deutsch"   => "German",
 				  "de"        => "German",
@@ -198,34 +203,8 @@ my %alias_table= (
 				  "português" => "Portuguese",
 				  "portugues" => "Portuguese",
 				  "pt_pt"     => "Portuguese",
-);
+						 );
 
-sub init {
-
-	my $lang= $ENV{LANG};
-
-	# You can call the following a hack - we call
-    # strftime to calculate dates to get the locale dependent
-    # names - if anybody knows a better method to access
-    # the locales installed on the system, feel free to change it
-
-	@Psh::mon= ();
-	for( my $i=0; $i<12; $i++)
-	{
-		push( @Psh::mon, strftime("%b",0,0,0,1,$i,99));
-	}
-	@Psh::wday= ();
-	for( my $i=0; $i<7; $i++)
-	{
-		push( @Psh::wday, strftime("%a",0,0,0,19+$i,11,99,$i));
-	}
-
-	# Use the default locale for defaults
-	use Psh::Locale::Default;
-
-	# Now try to use a locale module depending on LANG
-	if( $lang and $lang ne "C" and $lang ne "POSIX") {
-		$lang=lc($lang);
 		$lang=$alias_table{$lang} if( exists $alias_table{$lang});
 	    $lang=ucfirst($lang);
 		eval "use Psh::Locale::$lang";
@@ -234,9 +213,64 @@ sub init {
 		# A better way would be to maybe use Locale::PGetText
 		# but that would again increase the requirements for
 		# psh unnecessarily
+		$special_locale=1;
 	}
+	$locale_loaded=1;
 }
 
+
+# You can call the following a hack - we call
+# strftime to calculate dates to get the locale dependent
+# names - if anybody knows a better method to access
+# the locales installed on the system, feel free to change it
+sub months {
+	if (@_) {
+		@mon=@_;
+	} else {
+		unless (@mon) {
+			if ($speciallocale) {
+				require POSIX;
+				for( my $i=0; $i<12; $i++) {
+					push( @mon, POSIX::strftime("%b",0,0,0,1,$i,99));
+				}
+			} else {
+				@mon= qw(Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec);
+			}
+		}
+	}
+	return @mon;
+}
+
+sub weekdays {
+	if (@_) {
+		@wday=@_;
+	} else {
+		unless (@wday) {
+			if ($speciallocale) {
+				require POSIX;
+				for( my $i=0; $i<7; $i++) {
+					push( @wday, POSIX::strftime("%a",0,0,0,19+$i,11,99,$i));
+				}
+			} else {
+				@wday=qw(Sun Mon Tue Wed Thu Fri Sat);
+			}
+		}
+	}
+	return @wday;
+}
+
+sub get_text {
+	my $key= shift;
+	load_locale();
+	return $Psh::text{$key};
+}
+
+sub set_text {
+	my $key= shift;
+	my $val= shift;
+	load_locale();
+	$Psh::text{$key}= $val;
+}
 
 
 1;
@@ -244,19 +278,43 @@ __END__
 
 =head1 NAME
 
-Psh::Locale::Base - containing base code for I18N
+Psh::Locale - containing base code for I18N
 
 =head1 SYNOPSIS
 
 
 =head1 DESCRIPTION
 
+   Psh::Locale::init();
+
+Initializes locale support
+
+   @tmp= Psh::Locale::months();
+
+Returns an array of locale-dependant month names
+
+   @tmp= Psh::Locale::weekdays();
+
+Returns an array of locale-dependant weekday names
+
+   Psh::Locale::months(qw(Jan Feb ...));
+
+Sets the month names
+
+   Psh::Locale::weekdays(qw(Jan Feb ...));
+
+Sets the weekday names
+
+   Psh::Locale::get_text($name)
+
+Returns the named text from the current locale
+
+   Psh::Locale::set_text($name,$value)
+
+Sets the text
 
 =head1 AUTHOR
 
 Markus Peter, warp@spin.de
-
-=head1 SEE ALSO
-
 
 =cut

@@ -1,11 +1,7 @@
 package Psh::OS::Win;
 
 use strict;
-use vars qw($VERSION);
-use Psh::Util ':all';
-
-use FileHandle;
-use DirHandle;
+require Psh::Util;
 
 eval {
 	use Win32;
@@ -16,13 +12,12 @@ eval {
 };
 
 if ($@) {
-	print_error_i18n('no_libwin32');
+	Psh::Util::print_error_i18n('no_libwin32');
 	die "\n";
 }
 
 my $console= new Win32::Console();
-
-$VERSION = do { my @r = (q$Revision: 1.30 $ =~ /\d+/g); sprintf "%d."."%02d" x $#r, @r }; # must be all one line, for MakeMaker
+my @user_cache=();
 
 #
 # For documentation see Psh::OS::Unix
@@ -31,7 +26,6 @@ $VERSION = do { my @r = (q$Revision: 1.30 $ =~ /\d+/g); sprintf "%d."."%02d" x $
 $Psh::OS::PATH_SEPARATOR=';';
 $Psh::OS::FILE_SEPARATOR='\\';
 
-$Psh::rc_file = "pshrc";
 $Psh::history_file = "psh_history";
 
 sub set_window_title {
@@ -55,11 +49,13 @@ sub get_hostname {
 
 sub get_known_hosts {
 	my $hosts_file = "$ENV{windir}\\HOSTS";
-	my $hfh = new FileHandle($hosts_file, 'r');
-	return "localhost" unless defined($hfh);
-	my $hosts_text = join('', <$hfh>);
-	$hfh->close();
-	return Psh::Util::parse_hosts_file($hosts_text);  
+	if (open(F_KNOWNHOST,"< $hosts_file")) {
+		my $hosts_text = join('', <F_KNOWNHOST>);
+		close(F_KNOWNHOST);
+		return Psh::Util::parse_hosts_file($hosts_text);
+	} else {
+		return ("localhost");
+	}
 }
 
 #
@@ -74,7 +70,7 @@ sub display_pod {
 	close(TMP);
 
 	eval {
-		use Pod::Text;
+		require Pod::Text;
 		Pod::Text::pod2text($tmp,*STDOUT);
 	};
 	print $text if $@;
@@ -97,24 +93,28 @@ sub execute_complex_command {
 	my $fgflag= shift @array;
 	my @return_val;
 	my $pgrp_leader=0;
+	my $success= 0;
 	my $pid;
 	my $string='';
 	my @tmp;
 
 	if($#array) {
-		print_error("No piping yet.\n");
+		Psh::Util::print_error("No piping yet.\n");
 		return ();
 	}
 
 	my $obj;
 	for( my $i=0; $i<@array; $i++) {
-		my ($coderef, $how, $options, $words, $strat, $text)= @{$array[$i]};
+		my ($strategy, $how, $options, $words, $text, $opt)= @{$array[$i]};
+		local $Psh::current_options=$opt;
 		my $line= join(' ',@$words);
-		my ($eval_thingie,$words,$bgflag,@return_val)= &$coderef( \$line, $words,$how);
+		my ($eval_thingie,$bgflag);
+		($success,$eval_thingie,$words,$bgflag,@return_val)= $strategy->execute( \$line, $words, $how, 0);
+
 		my @tmp;
 
 		if( defined($eval_thingie)) {
-			($obj,@tmp)= _fork_process($eval_thingie,$fgflag,$text,undef,$words);
+			($obj,$success,@tmp)= _fork_process($eval_thingie,$fgflag,$text,undef,$words);
 		}
 		if( @return_val < 1 ||
 			!defined($return_val[0])) {
@@ -124,15 +124,15 @@ sub execute_complex_command {
 	}
 	if ($obj) {
 		my $pid=$obj->GetProcessID();
-		my $job=$Psh::joblist->create_job($pid,$string,$obj);
+		my $job=Psh::Joblist::create_job($pid,$string,$obj);
 		if( $fgflag) {
 			_wait_for_system($obj, 1);
 		} else {
-			my $visindex= $Psh::joblist->get_job_number($pid);
+			my $visindex= Psh::Joblist::get_job_number($pid);
 			Psh::Util::print_out("[$visindex] Background $pid $string\n");
 		}
 	}
-	return @return_val;
+	return ($success,@return_val);
 }
 
 sub _fork_process {
@@ -178,13 +178,14 @@ sub _handle_wait_status {
 
 	return '' unless $obj;
 	my $pid= $obj->GetProcessID();
-	my $job= $Psh::joblist->get_job($obj->GetProcessID());
+	my $job= Psh::Joblist::get_job($obj->GetProcessID());
 	my $command = $job->{call};
-	my $visindex= $Psh::joblist->get_job_number($pid);
+	my $visindex= Psh::Joblist::get_job_number($pid);
 	my $verb='';
 
-	Psh::Util::print_out("[$visindex] \u$Psh::text{done} $pid $command\n") unless $quiet;
-	$Psh::joblist->delete_job($pid);
+	my $tmp= Psh::Locale::get_text('done');
+	Psh::Util::print_out("[$visindex] \u$tmp $pid $command\n") unless $quiet;
+	Psh::Joblist::delete_job($pid);
 	return '';
 }
 
@@ -194,21 +195,10 @@ sub fork_process {
 }
 
 sub get_all_users {
-	my @result=();
-	Win32::NetAdmin::GetUsers("",FILTER_NORMAL_ACCOUNT,\@result);
-# does not work e.g. on Win2000
-#	my @result = (".DEFAULT");
-#  	if (-d "$ENV{windir}\Profiles") {
-#  		my $Profiles = new DirHandle "$ENV{windir}\Profiles";
-#  		if (defined($Profiles)) {
-#  			while (defined(my ($Profile) = $Profiles->read())) {
-#  				if (-d $Profile) {
-#  					push (@result, $Profile);
-#  				}
-#  			}
-#  		}
-#  	}
-	return @result;
+	unless (@user_cache) {
+		Win32::NetAdmin::GetUsers("",FILTER_NORMAL_ACCOUNT,\@user_cache);
+	}
+	return @user_cache;
 }
 
 
@@ -226,22 +216,24 @@ sub restart_job
 {
 	my ($fg_flag, $job_to_start) = @_;
 
-	my $job= $Psh::joblist->find_job($job_to_start);
+	my $job= Psh::Joblist::find_job($job_to_start);
 
 	if(defined($job)) {
 		my $pid = $job->{pid};
 		my $command = $job->{call};
 
 		if ($command) {
-			my $verb = "\u$Psh::text{restart}";
+			my $tmp=Psh::Locale::get_text('restart');
+			my $verb = "\u$tmp";
 			my $qRunning = $job->{running};
 			if ($fg_flag) {
-			  $verb = "\u$Psh::text{foreground}";
+				my $tmp= Psh::Locale::get_text('foreground');
+				$verb = "\u$tmp";
 			} elsif ($qRunning) {
 			  # bg request, and it's already running:
 			  return;
 			}
-			my $visindex = $Psh::joblist->get_job_number($pid);
+			my $visindex = Psh::Joblist::get_job_number($pid);
 			Psh::Util::print_out("[$visindex] $verb $pid $command\n");
 
 			if($fg_flag) {
@@ -273,7 +265,7 @@ sub get_rc_files {
 	push @rc, "\\etc\\pshrc" if -r "\\etc\\pshrc";
 	push @rc, "$ENV{WINDIR}\\pshrc" if -r "$ENV{WINDIR}\\pshrc";
 	my $home= Psh::OS::get_home_dir();
-	if ($home) { push @rc, File::Spec->catfile($home,$Psh::rc_file) };
+	if ($home) { push @rc, catfile($home,'pshrc') };
 	return @rc;
 }
 
@@ -317,6 +309,122 @@ sub getcwd_psh {
 	return $tmp||Psh::OS::fb_getcwd();
 }
 
+
+sub get_editor {
+	my $suggestion= shift;
+    return $suggestion||$ENV{VISUAL}||$ENV{EDITOR}||'edit';
+}
+
+
+# From File::Spec
+
+
+sub canonpath {
+    my ($path) = @_;
+    $path =~ s/^([a-z]:)/\u$1/s;
+    $path =~ s|/|\\|g;
+    $path =~ s|([^\\])\\+|$1\\|g;                  # xx////xx  -> xx/xx
+    $path =~ s|(\\\.)+\\|\\|g;                     # xx/././xx -> xx/xx
+    $path =~ s|^(\.\\)+||s unless $path eq ".\\";  # ./xx      -> xx
+    $path =~ s|\\\Z(?!\n)||
+	  unless $path =~ m#^([A-Z]:)?\\\Z(?!\n)#s;   # xx/       -> xx    return $path;
+}
+
+sub catfile {
+    my $file = pop @_;
+    return $file unless @_;
+    my $dir = catdir(@_);
+    $dir .= "\\" unless substr($dir,-1) eq "\\";
+    return $dir.$file;
+}
+
+sub catdir {
+    my @args = @_;
+    foreach (@args) {
+        # append a slash to each argument unless it has one there
+        $_ .= "/" if $_ eq '' || substr($_,-1) ne "/";
+    }
+    return canonpath(join('', @args));
+}
+
+sub file_name_is_absolute {
+	my $file= shift;
+    return scalar($file =~ m{^([a-z]:)?[\\/]}is);
+}
+
+sub rootdir {
+	"\\";
+}
+
+sub splitdir {
+    my ($directories) = @_ ;
+
+    if ( $directories !~ m|[\\/]\Z(?!\n)| ) {
+        return split( m|[\\/]|, $directories );
+    }
+    else {
+        my( @directories )= split( m|[\\/]|, "${directories}dummy" ) ;
+        $directories[ $#directories ]= '' ;
+        return @directories ;
+    }
+}
+
+sub splitpath {
+    my ($path, $nofile) = @_;
+    my ($volume,$directory,$file) = ('','','');
+    if ( $nofile ) {
+        $path =~
+            m{^( (?:[a-zA-Z]:|(?:\\\\|//)[^\\/]+[\\/][^\\/]+)? )
+                 (.*)
+             }xs;
+        $volume    = $1;
+        $directory = $2;
+    }
+    else {
+        $path =~
+            m{^ ( (?: [a-zA-Z]: |
+                      (?:\\\\|//)[^\\/]+[\\/][^\\/]+
+                  )?
+                )
+                ( (?:.*[\\\\/](?:\.\.?\Z(?!\n))?)? )
+                (.*)
+             }xs;
+        $volume    = $1;
+        $directory = $2;
+        $file      = $3;
+    }
+ 
+    return ($volume,$directory,$file);
+}
+sub rel2abs {
+    my ($path,$base ) = @_;
+
+    if ( ! file_name_is_absolute( $path ) ) {
+        if ( !defined( $base ) || $base eq '' ) {
+            $base = Psh::OS::getcwd_psh() ;
+        }
+        elsif ( ! file_name_is_absolute( $base ) ) {
+            $base = rel2abs( $base ) ;
+        }
+        else {
+            $base = canonpath( $base ) ;
+        }
+ 
+        my ( $path_directories, $path_file ) =
+            (splitpath( $path, 1 ))[1,2] ;
+ 
+        my ( $base_volume, $base_directories ) =
+		  splitpath( $base, 1 ) ;
+ 
+        $path = catpath(
+						$base_volume,
+						catdir( $base_directories, $path_directories ),
+						$path_file
+					   ) ;
+    }
+ 
+    return canonpath( $path ) ;
+}
 
 1;
 

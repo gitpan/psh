@@ -1,29 +1,32 @@
 package Psh::OS;
 
 use strict;
-use vars qw($VERSION $AUTOLOAD $ospackage);
-use Carp 'croak';
-use Cwd;
-use Config;
-use File::Spec;
 
-$VERSION = do { my @r = (q$Revision: 1.14 $ =~ /\d+/g); sprintf "%d."."%02d" x $#r, @r }; # must be all one line, for MakeMaker
+my $ospackage;
 
-$ospackage="Psh::OS::Unix";
-
-$ospackage="Psh::OS::Mac" if( $^O eq "MacOS");
-$ospackage="Psh::OS::Win" if( $^O eq "MSWin32");
-
-eval "use $ospackage";
-die "Could not find OS specific package $ospackage: $@" if( $@);
+BEGIN {
+	if ($^O eq 'MSWin32') {
+		$ospackage='Psh::OS::Win';
+		require Psh::OS::Win;
+		die "Could not find OS specific package $ospackage: $@" if $@;
+	} else {
+		$ospackage='Psh::OS::Unix';
+		require Psh::OS::Unix;
+		die "Could not find OS specific package $ospackage: $@" if $@;
+	}
+}
 
 sub AUTOLOAD {
+	no strict;
 	$AUTOLOAD=~ s/.*:://;
-	no strict 'refs';
 	my $name="${ospackage}::$AUTOLOAD";
 	$name="Psh::OS::fb_$AUTOLOAD" unless ref *{$name}{CODE} eq 'CODE';
-	croak "Function `$AUTOLOAD' in Psh::OS does not exist." unless
-		ref *{$name}{CODE} eq 'CODE';
+	unless (ref *{$name}{CODE} eq 'CODE') {
+		require Carp;
+		eval {
+			Carp::croak("Function `$AUTOLOAD' in Psh::OS does not exist.");
+		};
+	}
 	*$AUTOLOAD=  *$name;
 	goto &$AUTOLOAD;
 }
@@ -40,11 +43,11 @@ sub _recursive_glob {
 	opendir( DIR, $dir) || return ();
 	my @files= readdir(DIR);
 	closedir( DIR);
-	my @result= map { File::Spec->catdir($dir,$_) }
-	                     grep { /^$pattern$/ } @files;
+	my @result= map { catdir($dir,$_) }
+	  grep { /^$pattern$/ } @files;
 	foreach my $tmp (@files) {
-		my $tmpdir= File::Spec->catdir($dir,$tmp);
-		next if ! -d $tmpdir || !File::Spec->no_upwards($tmp);
+		my $tmpdir= catdir($dir,$tmp);
+		next if ! -d $tmpdir || !no_upwards($tmp);
 		push @result, _recursive_glob($pattern, $tmpdir);
 	}
 	return @result;
@@ -66,18 +69,26 @@ sub _escape {
 # is faster
 #
 sub fb_glob {
-	my( $pattern, $dir) = @_;
+	my( $pattern, $dir, $already_absed) = @_;
+
+	return () unless $pattern;
+
 	my @result;
 	if( !$dir) {
 		$dir=$ENV{PWD};
 	} else {
-		$dir=Psh::Util::abs_path($dir);
+		$dir=Psh::Util::abs_path($dir) unless $already_absed;
 	}
+	return unless $dir;
 
 	# Expand ~
 	my $home= $ENV{HOME}||get_home_dir();
-	$pattern=~ s|^\~/|$home/|;
-    $pattern=~ s|^\~([^/]+)|&get_home_dir($1)|e;
+	if ($pattern eq '~') {
+		$pattern=$home;
+	} else {
+		$pattern=~ s|^\~/|$home/|;
+		$pattern=~ s|^\~([^/]+)|&get_home_dir($1)|e;
+	}
 
 	return $pattern if $pattern !~ /[*?]/;
 	
@@ -87,7 +98,7 @@ sub fb_glob {
 		my $prefix= $1||'';
 		$pattern= $2;
 		$prefix=~ s:/$::;
-	    $dir= File::Spec->catdir($dir,$prefix);
+	    $dir= catdir($dir,$prefix);
 		$pattern=_escape($pattern);
 		$pattern=~s/\*/[^\/]*/g;
 		$pattern=~s/\?/./g;
@@ -121,11 +132,12 @@ sub fb_glob {
 
 sub fb_signal_name {
 	my $signalnum = shift;
-	my @numbers= split ',',$Config{sig_num};
-	@numbers= split ' ',$Config{sig_num} if( @numbers==1);
+	require Config;
+	my @numbers= split ',',$Config::Config{sig_num};
+	@numbers= split ' ',$Config::Config{sig_num} if( @numbers==1);
 	# Strange incompatibility between perl versions
 
-	my @names= split ' ',$Config{sig_name};
+	my @names= split ' ',$Config::Config{sig_name};
 	for( my $i=0; $i<$#numbers; $i++)
 	{
 		return $names[$i] if( $numbers[$i]==$signalnum);
@@ -140,7 +152,7 @@ sub fb_signal_name {
 
 sub fb_signal_description {
 	my $signal_name= signal_name(shift);
-	my $desc= $Psh::text{sig_description}->{$signal_name};
+	my $desc= Psh::Locale::get_text('sig_description')->{$signal_name};
    	if( defined($desc) and $desc) {
 		return "SIG$signal_name - $desc";
 	}
@@ -158,7 +170,6 @@ sub fb_remove_signal_handlers {1}
 sub fb_setup_signal_handlers {1}
 sub fb_setup_sigsegv_handler {1}
 sub fb_setup_readline_handler {1}
-sub fb_reinstall_resize_handler {1}
 sub fb_reap_children {1}
 sub fb_abs_path { undef }
 
@@ -174,9 +185,101 @@ sub fb_exit_psh {
 	CORE::exit(0);
 }
 
-sub fb_getcwd {
-	return Cwd::getcwd();
+sub fb_getcwd_psh {
+	eval { require Cwd; };
+	return eval { Cwd::getcwd(); } || '';
 }
+
+sub fb_LOCK_SH() { 1; }
+sub fb_LOCK_EX() { 2; }
+sub fb_LOCK_NB() { 4; }
+sub fb_LOCK_UN() { 8; }
+
+sub fb_lock {
+	my $file= shift;
+	my $type= shift || Psh::OS::LOCK_SH();
+	my $count=3;
+	my $status=0;
+	while ($count-- and !$status) {
+		$status= flock($file, $type| Psh::OS::LOCK_NB());
+	}
+	return $status;
+}
+
+sub fb_unlock {
+	my $file= shift;
+	flock($file, Psh::OS::LOCK_UN()| Psh::OS::LOCK_NB());
+}
+
+sub fb_reinstall_resize_handler { 1; }
+
+{
+	my $handler_type=0;
+
+	sub fb_install_resize_handler {
+		eval '$Psh::term->get_screen_size()';
+		unless ($@) {
+			$handler_type=3;
+			return;
+		}
+		eval 'use Term::Size;';
+		if ($@) {
+			eval 'use Term::ReadKey;';
+			unless ($@) {
+				$handler_type=2;
+			}
+		} else {
+			$handler_type=1;
+		}
+	}
+
+
+	sub fb_check_terminal_size {
+		my ($cols,$rows);
+
+		if ($handler_type==0) {
+			return;
+		} elsif ($handler_type==3) {
+			eval {
+				($rows,$cols)= $Psh::term->get_screen_size();
+			};
+		} elsif ($handler_type==1) {
+			eval {
+				($cols,$rows)= Term::Size::chars();
+			};
+		} elsif ($handler_type==2) {
+			eval {
+				($cols,$rows)= Term::ReadKey::GetTerminalSize(*STDOUT);
+			};
+		}
+
+		if($cols && $rows && ($cols > 0) && ($rows > 0)) {
+			$ENV{COLUMNS} = $cols;
+			$ENV{LINES}   = $rows;
+			if( $Psh::term) {
+				$Psh::term->Attribs->{screen_width}=$cols-1;
+			}
+			# for ReadLine::Perl
+		}
+	}
+}
+
+
+# File::Spec
+#
+# We add the necessary functions directly because:
+# 1) Changes to File::Spec might be fatal to psh's file location mechanisms
+# 2) File::Spec loads unwanted modules
+# 3) We don't need it anyway as we need platform-specific OS modules
+#    anyway
+#
+# Normally I wouldn't do it - but this is a shell and memory
+# consumption and startup time is worth something for everyday work...
+
+sub fb_no_upwards {
+    return grep(!/^\.{1,2}\Z(?!\n)/s, @_);
+}
+
 
 1;
 

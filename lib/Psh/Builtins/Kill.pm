@@ -1,8 +1,5 @@
 package Psh::Builtins::Kill;
 
-use Config;
-
-
 =item * C<kill [-SIGNAL] [%JOB | PID | JOBNAME] | -l>
 
 Send SIGNAL (which defaults to TERM) to the given process, specified
@@ -14,69 +11,73 @@ sub bi_kill
 {
 	if( ! Psh::OS::has_job_control()) {
 		Psh::Util::print_error_i18n('no_jobcontrol');
-		return undef;
+		return (0,undef);
 	}
 
 	my @args = split(' ',$_[0]);
 	my $sig= 'TERM';
 	my (@pids, $job);
 
+	unless (@args) {
+		require Psh::Builtins::Help;
+		Psh::Builtins::Help::bi_help('kill');
+		return (0,undef);
+	}
+
+
 	if (scalar(@args) == 1 &&
 		$args[0] eq '-l') {
-		Psh::Util::print_out($Config{sig_name}."\n");
-		return undef;
+		require Config;
+		Psh::Util::print_out($Config::Config{sig_name}."\n");
+		return (0,undef);
 	} elsif( substr($args[0],0,1) eq '-') {
 		$sig= substr($args[0],1);
 		shift @args;
 	}
 
-	my $status= 0;
+	my $count= 0;
 	foreach my $pid (@args) {
 		if ($pid =~ m|^%(\d+)$|) {
 			my $temp = $1 - 1;
-			
-			$job= $Psh::joblist->find_job($temp);
+
+			$job= Psh::Joblist::find_job($temp);
 			if( !defined($job)) {
 				Psh::Util::print_error_i18n('bi_kill_no_such_job',$pid);
-				$status=1;
 				next;
 			}
-			
+
 			$pid = $job->{pid};
 		}
+		elsif ($pid !~ m/^\d+$/) {
+			my ($index,$rpid)= Psh::Joblist::find_last_with_name($pid);
+			if( $rpid) {
+				$pid=$rpid;
+			} else {
+				Psh::Util::print_error_i18n('bi_kill_no_such_job',$pid);
+				next;
+			}
+		}
 
-		my ($index,$rpid)= $Psh::joblist->find_last_with_name($pid);
-		if( $rpid) {
-			$pid=$rpid;
-		} else {
-			Psh::Util::print_error_i18n('bi_kill_no_such_job',$pid);
-		}
-		
-		if ($pid =~ m/\D/) {
-			Psh::Util::print_error_i18n('bi_kill_no_such_jobspec',$pid);
-			$status=1;
-			next;
-		}
-		
-		if ($sig ne 'CONT' and $Psh::joblist->job_exists($pid)
-			and !(($job=$Psh::joblist->get_job($pid))->{running})) {
+		if ($sig ne 'CONT' and Psh::Joblist::job_exists($pid)
+			and !(($job=Psh::Joblist::get_job($pid))->{running})) {
 			#Better wake up the process so it can respond to this signal
 			$job->continue;
 		}
 
 		$sig=0 if $sig eq 'ZERO'; # stupid perl bug
-		
-		if (CORE::kill($sig, $pid) != 1) {
+
+		if (my $num=CORE::kill($sig, $pid) != 1) {
 			Psh::Util::print_error_i18n('bi_kill_error_sig',$pid,$sig);
-			$status=1;
 			next;
+		} else {
+			$count+=$num;
 		}
-		
-		if ($sig eq 'CONT' and $Psh::joblist->job_exists($pid)) {
-			$Psh::joblist->get_job($pid)->{running}=1;
+
+		if ($sig eq 'CONT' and Psh::Joblist::job_exists($pid)) {
+			Psh::Joblist::get_job($pid)->{running}=1;
 		}
 	}
-	return $status;
+	return ($count!=0,$count);
 }
 
 # Completion function for kill
@@ -84,13 +85,15 @@ sub cmpl_kill {
 	my( $text, $pretext, $starttext) = @_;
 	my @tmp= ();
 
-	$Psh::joblist->enumerate;
-	while( my $job= $Psh::joblist->each) {
+	Psh::Joblist::enumerate();
+	while( my $job= Psh::Joblist::each()) {
 		push @tmp, $job->{call};
 	}
 
-	if( split(' ',$starttext)<2) {
-		push @tmp, map { '-'.$_} split(' ', $Config{sig_name});
+	my @tmp2= split /\s+/, $starttext; # just to remove a deprecated message...
+	if( @tmp2<2) {
+		require Config;
+		push @tmp, map { '-'.$_} split(' ', $Config::Config{sig_name});
 	}
 
 	return (1,grep { Psh::Util::starts_with($_,$text) } 

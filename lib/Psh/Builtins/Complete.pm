@@ -2,39 +2,116 @@
 #
 #	Complete.pm : 
 #
-#	$Id: Complete.pm,v 1.3 2000/04/13 11:48:02 warp Exp $
+#	$Id: Complete.pm,v 1.11 2001/10/09 16:33:10 warp Exp $
 
 package Psh::Builtins::Complete;
 
-use Psh::PCompletion qw(pcomp_getopts %ACTION %COMPSPEC compgen redir_test);
+=item * C<complete module MODULE>
 
-=item * C<complete>
+Load a pre-defined completion module
+
+=item * C<complete module list>
+
+Lists pre-defined completion modules
+
+=item * C<complete ...>
 
 Define programmable completion method.
 
 	complete [-abcdefjkvu] [-A ACTION] [-G GLOBPAT] [-W WORDLIST]
 		 [-P PREFIX] [-S SUFFIX] [-X FILTERPAT] [-x FILTERPAT]
 		 [-F FUNCTION] [-C COMMAND] NAME [NAME] ..
-	complete -pr [NAME ...]
+
+=item * C<complete -p [NAME ...]>
+
+Print completion spec for commands NAME
+
+=item * C<complete -r NAME>
+
+Delete completion spec for command NAME
 
 =cut
 
-sub usage_complete {
-    print STDERR <<EOM;
-complete [-abcdefjkvu] [-A ACTION] [-G GLOBPAT] [-W WORDLIST]
-	 [-P PREFIX] [-S SUFFIX] [-X FILTERPAT] [-x FILTERPAT]
-	 [-F FUNCTION] [-C COMMAND] NAME [NAME] ..
-complete -pr [NAME ...]
-EOM
-}
-
 sub bi_complete {
-    my $cs = pcomp_getopts($_[1]) or usage_complete, return;
+	my $cs;
+
+	if ($_[1] and $_[1][0] and 
+		$_[1][0] eq 'module' and
+	    $_[1][1]) {
+		my @dirs=
+		  (
+		   Psh::OS::catdir(Psh::OS::rootdir(),'usr','share',
+							  'psh','complete'),
+		   Psh::OS::catdir(Psh::OS::rootdir(),'usr','local','share',
+							  'psh','complete'),
+		   Psh::OS::catdir(Psh::OS::get_home_dir(),'.psh','share','complete'),
+		   Psh::OS::catdir(Psh::OS::rootdir(),'psh','complete')
+		  );
+		if ($_[1][1] eq 'list') {
+			my %result=();
+			foreach my $dir (@dirs) {
+				next unless -r $dir;
+				my @tmp= Psh::OS::glob('*',$dir);
+				foreach my $file (@tmp) {
+					my $full= Psh::OS::catfile($dir,$file);
+					next if !-r $full or -d _;
+					next if $file=~/\~$/;
+					$result{$file}=1;
+				}
+			}
+			Psh::Util::print_list( sort keys %result);
+			return (1,undef);
+		} else {
+			my $file=$_[1][1];
+			my @lines;
+			foreach my $dir (@dirs) {
+				my $full= Psh::OS::catfile($dir,$file);
+				if (-r $full and !-d $full) {
+					$file= $full;
+					last;
+				}
+			}
+
+			open(THEME,"< $file");
+			@lines= <THEME>;
+			close(THEME);
+			if (!@lines) {
+				Psh::Util::print_error("Could not find completion module '$file'.\n");
+				return (0,undef);
+			}
+			if ($lines[0]=~/^\#\!.*pshcomplete/) { # psh-script
+				my $tmp= $lines[1];
+				$tmp=~s/^\s*\#//;
+				my @commands= split /\s+/, $tmp;
+				foreach (@commands) {
+					$Psh::Completion::modules{$_}= $file;
+				}
+				return (1,undef);
+			} else {
+				Psh::Util::print_error("Completion module '$file' is not in a valid format.\n");
+				return (0,undef);
+			}
+		}
+	}
+	elsif (!$_[1]) {
+		require Psh::Builtins::Help;
+		Psh::Builtins::Help::bi_help('complete');
+		return (0,undef);
+	}
+
+	require Psh::PCompletion;
+	if (!($cs= Psh::PCompletion::pcomp_getopts($_[1]))) {
+		require Psh::Builtins::Help;
+		Psh::Builtins::Help::bi_help('complete');
+		return (0,undef);
+	}
+
+
     @_ = @{$_[1]};
 
     if (! $cs->{remove} && $#_ < 0) {
 		# no option or only -p
-		foreach (sort keys(%COMPSPEC)) {
+		foreach (sort keys(%Psh::PCompletion::COMPSPEC)) {
 			print_compspec($_);
 		}
 	} elsif ($cs->{print}) {
@@ -42,23 +119,26 @@ sub bi_complete {
 			print_compspec($_);
 		}
     } elsif ($cs->{remove}) {
-		@_ = keys %COMPSPEC if ($#_ < 0);
+		@_ = keys %Psh::PCompletion::COMPSPEC if ($#_ < 0);
 		foreach (@_) {
-			delete $COMPSPEC{$_};
+			delete $Psh::PCompletion::COMPSPEC{$_};
 		}
     } else {
 		foreach (@_) {
-			$COMPSPEC{$_} = $cs;
+			$Psh::PCompletion::COMPSPEC{$_} = $cs;
 		}
     }
+	return (1,undef);
 }
 
 sub print_compspec ($) {
     my ($cmd) = @_;
-    my $cs = $COMPSPEC{$cmd};
+	require Psh::PCompletion;
+
+    my $cs = $Psh::PCompletion::COMPSPEC{$cmd};
     print 'complete';
-    foreach (sort keys(%ACTION)) {
-	print " -A $_" if ($cs->{action} & $ACTION{$_});
+    foreach (sort keys(%Psh::PCompletion::ACTION)) {
+		print " -A $_" if ($cs->{action} & $Psh::PCompletion::ACTION{$_});
     }
     print " -G \'$cs->{globpat}\'"	if defined $cs->{globpat};
     print " -W \'$cs->{wordlist}\'"	if defined $cs->{wordlist};
@@ -68,6 +148,7 @@ sub print_compspec ($) {
     print " -x \'$cs->{ffilterpat}\'"	if defined $cs->{ffilterpat};
     print " -P \'$cs->{prefix}\'"	if defined $cs->{prefix};
     print " -S \'$cs->{suffix}\'"	if defined $cs->{suffix};
+	print " -o $cs->{option}" if defined $cs->{option};
     print " $cmd\n";
 }
 
@@ -76,7 +157,9 @@ sub cmpl_complete {
 
     my ($prev) = $start =~ /(\S+)\s+$/;
 
-    my @COMPREPLY = redir_test($cur, $prev);
+	require Psh::PCompletion;
+
+    my @COMPREPLY = Psh::PCompletion::redir_test($cur, $prev);
     return @COMPREPLY if @COMPREPLY;
 
     if ($start =~ /^\s*(\S+)\s+$/ || $cur eq '-' ) {
@@ -95,4 +178,6 @@ sub cmpl_complete {
         return compgen('-c', $cur);
     }
 }
+
+1;
 

@@ -1,6 +1,6 @@
 package Psh::Builtins::Set;
 
-use Psh::Util ':all';
+require Psh::Util;
 
 =item * C<set>
 
@@ -15,7 +15,7 @@ sub bi_set
 		print "$_=$ENV{$_}\n";
 	}
 
-	return undef;
+	return (1,undef);
 }
 
 1;

@@ -1,5 +1,8 @@
 package Psh::Builtins::Builtin;
 
+require Psh::Strategy;
+require Psh::Util;
+
 =item * C<builtin COMMAND [ARGS]>
 
 Run a shell builtin.
@@ -8,8 +11,12 @@ Run a shell builtin.
 
 sub bi_builtin {
 	my $text= shift;
-	Psh::evl($text,'built_in','fallback_builtin');
-	return 1;
+	if (Psh::Strategy::active('built_in')) {
+		return Psh::evl($text,'built_in','fallback_builtin');
+	} else {
+		print_error_i18n('bi_builtin_inactive');
+		return (0,undef);
+	}
 }
 
 sub cmpl_builtin {

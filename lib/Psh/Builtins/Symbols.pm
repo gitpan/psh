@@ -1,7 +1,6 @@
 package Psh::Builtins::Symbols;
 
-use Psh::Util ':all';
-
+require Psh::Util;
 
 =item * C<symbols [package]>
 
@@ -18,6 +17,8 @@ sub bi_symbols
 	my $pack = shift;
 	my (@ref, @scalar, @array, @hash, @code, @glob, @handle);
 	my @sym;
+
+	$pack ||= $Psh::PerlEval::current_package;
 
 	{
 		no strict qw(refs);
@@ -40,12 +41,14 @@ sub bi_symbols
 		}
 	}
 
-	print_out("Reference: ", join(' ', @ref),    "\n");
-	print_out("Scalar:    ", join(' ', @scalar), "\n");
-	print_out("Array:     ", join(' ', @array),  "\n");
-	print_out("Hash:      ", join(' ', @hash),   "\n");
-	print_out("Code:      ", join(' ', @code),   "\n");
-	print_out("Handle:    ", join(' ', @handle), "\n");
+	Psh::Util::print_out("Package: ".$pack."\n");
+	Psh::Util::print_out("Reference: ", join(' ', @ref),    "\n");
+	Psh::Util::print_out("Scalar:    ", join(' ', @scalar), "\n");
+	Psh::Util::print_out("Array:     ", join(' ', @array),  "\n");
+	Psh::Util::print_out("Hash:      ", join(' ', @hash),   "\n");
+	Psh::Util::print_out("Code:      ", join(' ', @code),   "\n");
+	Psh::Util::print_out("Handle:    ", join(' ', @handle), "\n");
+	return (1,undef);
 }
 
 1;

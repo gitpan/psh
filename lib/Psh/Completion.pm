@@ -1,55 +1,55 @@
 package Psh::Completion;
 
 use strict;
-use vars qw($VERSION @bookmarks @user_completions $ac $complete_first_word_dirs);
-
-use Psh::Util qw(:all starts_with ends_with);
-use Psh::OS;
-use Psh::PCompletion;
-
-$VERSION = do { my @r = (q$Revision: 1.38 $ =~ /\d+/g); sprintf "%d."."%02d" x $#r, @r }; # must be all one line, for MakeMaker
+require Psh::Util;
+require Psh::OS;
 
 my $APPEND="not_implemented";
-my $GNU=0;
 
-#%custom_completions= ();
+@Psh::Completion::bookmarks= ();
+@Psh::Completion::autoload=();
 
-#@netprograms=('ping','ssh','telnet','ftp','ncftp','traceroute');
-@bookmarks= Psh::OS::get_known_hosts();
+my %module_loaded=();
 
 sub init
 {
-	@user_completions= Psh::OS::get_all_users();
-
 	my $attribs=$Psh::term->Attribs;
 
 	# The following is ridiculous, but....
-	if( $Psh::term->ReadLine eq "Term::ReadLine::Perl") {
+	if( $Psh::term->ReadLine eq 'Term::ReadLine::Perl') {
 		$APPEND='completer_terminator_character';
-	} elsif( $Psh::term->ReadLine eq "Term::ReadLine::Gnu") {
-		$GNU=1;
+	} elsif( $Psh::term->ReadLine eq 'Term::ReadLine::Gnu') {
 		$APPEND='completion_append_character';
 	}
 
-	# Wow, both ::Perl and ::Gnu understand it
-	my $word_break=" \\\n\t\"&{}('`\$\%\@~<>=;|/";
-	$attribs->{special_prefixes}= "\$\%\@\~\&";
-	$attribs->{word_break_characters}= $word_break;
-	$attribs->{completer_word_break_characters}= $word_break ;
-
 	# Only ::Gnu understand it, and ::Perl ignores it silently.
 	$attribs->{completion_display_matches_hook}
-	    = \&perl_symbol_display_match_list;
+	    = \&display_match_list;
 }
 
-sub cmpl_bookmarks
+sub start_module {
+	my $command= shift;
+	my $file= $Psh::Completion::modules{$command};
+	return unless $file;
+	return if $module_loaded{$file};
+	open(FILE, "< $file");
+	my @lines= <FILE>;
+	close(FILE);
+	if (@lines) {
+		my $text= join('',@lines);
+		Psh::process_variable($text);
+		$module_loaded{$file}=1;
+	}
+}
+
 {
-	my ($text, $prefix)= @_;
-	my $length=length($prefix);
-	return
-		sort grep { length($_)>0 }
-           map { substr($_,$length) }
-	         grep { starts_with($_,$prefix.$text) } @bookmarks;
+	my $kh_loaded=0;
+	sub bookmarks {
+		return @Psh::Completion::bookmarks if $kh_loaded;
+		push @Psh::Completion::bookmarks, Psh::OS::get_known_hosts();
+		$kh_loaded=1;
+		return @Psh::Completion::bookmarks;
+	}
 }
 
 # Returns a list of possible file completions
@@ -60,10 +60,16 @@ sub cmpl_filenames
 
 	my $exclam=0;
 
+	# HACK HACK HACK - this needs to be fixed some other way -
+	# the completion code is severly messed I fear
+	$text= Psh::Parser::unquote($text);
+	$text=~ s/\\//g;
+	# HACK END
+
 	if ( $executable_only) {
-		if ($text=~s/^\!//) {
-			$exclam=1;
-		}
+	    if ($text=~s/^\!//) {
+		$exclam=1;
+	    }
 	}
 
 	my $globtext= $text;
@@ -74,35 +80,45 @@ sub cmpl_filenames
 		$globtext= substr($text,1);
 	}
 
-	my @result= Psh::OS::glob("$globtext*");
+	my @result;
 
-	if( $ENV{FIGNORE}) {
-		my @ignore= split(':',$ENV{FIGNORE});
+	if (substr($globtext,0,1) eq '~' and !($globtext=~/\//)) {
+		# after ~ try username completion
+		@result= cmpl_usernames($globtext);
+		$Psh::Completion::ac="/" if @result;
+		return @result;
+	}
+
+	@result= Psh::OS::glob("$globtext*");
+
+	if( Psh::Options::has_option('fignore')) {
+		my @ignore= Psh::Options::get_option('fignore');
 		@result= grep {
 			my $item= $_;
-			my $result= ! grep { ends_with($item,$_) } @ignore;
+			my $result= ! grep { Psh::Util::ends_with($item,$_) } @ignore;
 			$result;
 		} @result;
 	}
 
 	if ( $executable_only) {
-		@result= grep { -x $_ || -d $_ } @result;
+	    @result= grep { -x $_ || -d _ } @result;
 	}
+
+	@result= map { -d $_ ? "$_/" : $_ } @result;
 
 	# HACK: This won't help much if user tries to do another completion
 	# on the same item afterwards
 	@result= map { s/([ \'\"\´\`])/\\$1/g; $_ } @result unless $prepend eq '"';
 
 	if(@result==1) {
-		if( -d $result[0]) {
-			$ac='/'.$prepend;
-		} elsif( $prepend eq '"') {
-			$ac=$prepend;
+		if (substr($result[0],-1) eq '/') {
+			$Psh::Completion::ac='';
 		}
+		$Psh::Completion::ac=$prepend.$Psh::Completion::ac if $prepend;
 	}
 
 	foreach (@result) {
-		if( m|/([^/]+$)| ) {
+		if( m|/([^/]+\/?)$| ) {
 			$_=$1;
 		}
 	}
@@ -123,21 +139,26 @@ sub cmpl_directories
 		$globtext= substr($text,1);
 	}
 
-	my @result= grep { -d $_ } Psh::OS::glob("$globtext*");
-
-	if(@result==1) {
-		if( -d $result[0]) {
-			$ac='/'.$prepend;
-		} elsif( $prepend eq '"') {
-			$ac=$prepend;
-		}
+	my @result;
+	if (substr($globtext,0,1) eq '~' and !($globtext=~/\//)) {
+		# after ~ try username completion
+		@result= cmpl_usernames($globtext);
+		$Psh::Completion::ac="/" if @result;
+		return @result;
 	}
 
+	@result= grep { -d $_ } Psh::OS::glob("$globtext*");
+
+	$Psh::Completion::ac=$prepend||'';
+
+	@result= map { $_.'/' } @result;
+
 	foreach (@result) {
-		if( m|/([^/]+$)| ) {
+		if( m|/([^/]+/?)$| ) {
 			$_=$1;
 		}
 	}
+
 	return @result;
 }
 
@@ -146,7 +167,7 @@ sub cmpl_directories
 sub cmpl_usernames
 {
 	my $text= shift;
-	my @result= grep { starts_with($_,$text) } @user_completions;
+	my @result= grep { Psh::Util::starts_with($_,$text) } Psh::OS::get_all_users();
 	return @result;
 }
 
@@ -163,18 +184,22 @@ sub cmpl_executable
 		$exclam=1;
 	}
 
-	push @result, grep { starts_with($_,$cmd) } Psh::Builtins::get_alias_commands();
-	push @result, grep { starts_with($_,$cmd) } Psh::Builtins::get_builtin_commands();
-	push @result, cmpl_directories($cmd) if $complete_first_word_dirs;
+	if (Psh::Strategy::active('built_in')) {
+		if ($Psh::Support::Alias::loaded) {
+			push @result, grep { Psh::Util::starts_with($_,$cmd) } Psh::Support::Alias::get_alias_commands();
+		}
+		push @result, grep { Psh::Util::starts_with($_,$cmd) } Psh::Support::Builtins::get_builtin_commands();
+	}
+	push @result, cmpl_directories($cmd) if $Psh::Completion::complete_first_word_dirs;
 	
 	local $^W= 0;
 
-	which($cmd);
+	Psh::Util::which($cmd);
 	# set up absed_path if not already set and check
 	
 	foreach my $dir (@Psh::absed_path) {
-		push( @result, map { $exclam?'!'.$_:$_ }
-			  grep { -x $dir.'/'.$_&& ! -d } Psh::OS::glob("$cmd*",$dir) );
+	    push( @result, map { $exclam?'!'.$_:$_ }
+		  grep { -x $dir.'/'.$_ && ! -d _ } Psh::OS::glob("$cmd*",$dir) );
 	}
 	return @result;
 }
@@ -182,14 +207,6 @@ sub cmpl_executable
 
 #
 # Completes perl symbols
-#
-# TODO: Also complete package variables and package names
-#	by managing $CWP in top command loop or by buildin `package' command.
-#
-
-# $CWP : Current Working Package (not implemented yet)
-use vars qw($CWP);
-BEGIN { $CWP = 'main' }
 
 {
 	my %type;
@@ -208,7 +225,7 @@ BEGIN { $CWP = 'main' }
 			no strict qw(refs);
 		($prefix, $pre, $pkg) = ($text =~ m/^((\$#|[\@\$%&])(.*::)?)/);
 		my @packages = grep /::$/, $pkg ? keys %$pkg : keys %::;
-		$pkg = ($CWP eq 'main' ? '::' : $CWP . '::') unless $pkg;
+		$pkg = ($Psh::PerlEval::current_package eq 'main' ? '::' : $Psh::PerlEval::current_package . '::') unless $pkg;
 		
 		my @symbols;
 		if ($pre eq '$') {
@@ -239,10 +256,13 @@ BEGIN { $CWP = 'main' }
 sub cmpl_hashkeys {
 	my ($text, $line, $start) = @_;
 
-	my ($var,$arrow) = (substr($line, 0, $start + 1)
-			    =~ m/\$([\w:]+)\s*(->)?\s*{\s*['"]?$/); # });
-	no strict qw(refs);
-	$var = "${CWP}::$var" unless ($var =~ m/::/);
+	my $tmp= substr($line, 0, $start + 1);
+	my ($var,$arrow) = ($tmp =~ m/^[\$\%]([\w:]+)\s*(->)?\s*\{\s*['"]?/);
+	return () unless $var;
+
+	no strict 'refs';
+	$var = "$Psh::PerlEval::current_package::$var" unless ($var =~ m/::/);
+	return () unless $var;
 	if ($arrow) {
 		my $hashref = eval "\$$var";
 		return grep(/^\Q$text/, keys %$hashref);
@@ -264,7 +284,7 @@ sub cmpl_method {
 	my ($var, $pkg, $sym, $pk);
 	$var = (substr($line, 0, $start + 1)
 		=~ m/\$([\w:]+)\s*->\s*$/)[0];
-	$pkg = ref eval (($var =~ m/::/) ? "\$$var" : "\$${CWP}::$var");
+	$pkg = ref eval (($var =~ m/::/) ? "\$$var" : "\$$Psh::PerlEval::current_package::$var");
 	no strict qw(refs);
 	return grep(/^\Q$text/,
 		    map { $pk = $_ . '::';
@@ -275,7 +295,6 @@ sub cmpl_method {
 }
 
 {
-	my @keyword;
 
 	# complete perl bare words (Perl function, subroutines, filehandle)
 	sub cmpl_perl_function {
@@ -285,7 +304,7 @@ sub cmpl_method {
 		no strict qw(refs);
 		($prefix, $pkg) = ($text =~ m/^((.*::)?)/);
 		my @packages = grep /::$/, $pkg ? keys %$pkg : keys %::;
-		$pkg = ($CWP eq 'main' ? '::' : $CWP . '::') unless $pkg;
+		$pkg = ($Psh::PerlEval::current_package eq 'main' ? '::' : $Psh::PerlEval::current_package . '::') unless $pkg;
 		
 		my @subs = grep (/^\w+$/
 				 && ($sym = $pkg . $_,
@@ -294,17 +313,17 @@ sub cmpl_method {
 				 keys %$pkg);
 		# Do we need a user customizable variable to ignore @packages?
 		my @result= grep(/^\Q$text/,
-						 !$prefix && @keyword,
+						 !$prefix && @Psh::Completion::keyword,
 						 map($prefix . $_, @packages, @subs));
 		if (@result==1) {
-			$ac='';
+			$Psh::Completion::ac='';
 		}
 		return @result;
     }
 
 	BEGIN {
 		# from perl5.004_02 perlfunc
-		@keyword = qw(
+		@Psh::Completion::keyword = qw(
 		    chomp chop chr crypt hex index lc lcfirst
 		    length oct ord pack q qq
 		    reverse rindex sprintf substr tr uc ucfirst
@@ -391,67 +410,110 @@ sub completion
 	my ($text, $line, $start) = @_;
 	my $attribs               = $Psh::term->Attribs;
 
+
 	my @tmp=();
+	my $cut= 0;
+	my $starttext= substr($line, 0, $start);
+
+	if ($starttext =~ /((?:\S|\\\s)+\\\s)$/) {
+		$text= $1.$text;
+		$cut= length($1);
+		$start-= $cut;
+		$starttext= substr($line, 0, $start);
+	}
+
 
 	my $startchar= substr($line, $start, 1);
-	my $starttext= substr($line, 0, $start);
+
 	$starttext =~ /^\s*(\S+)\s+/;
-	my $startword= $1 || '';
+	my $command= $1 || '';
 
 	my $pretext= '';
-	if( $starttext =~ /\s(\S*)$/) {
+        if( $starttext =~ /--\w+=(\S*)$/) {
+                $pretext= $1;
+        } elsif ( $starttext =~ /\s(\S*)$/) {
 		$pretext= $1;
 	} elsif( $starttext =~ /^(\S*)$/) {
 		$pretext= $1;
 	}
 
-	if( $starttext =~ /[\|\`]\s*(\S+)\s+$/) {
-		$startword= $1;
+	# are we in backticks or after a pipe ?
+	if( $starttext =~ /.*[\|\`]\s*(\S+)\s+/) {
+		$command= $1;
 	}
 
-	my $firstflag= $starttext !~/\s/;
+	my $firstflag= $starttext !~/\s/ || 0;
 
-	$ac=' ';
+	$Psh::Completion::ac=' ';
 
-	# Check completion-spec is defined or not.
-	my $cmd;
-	$line =~ m|^\s*(\S*/)?(\S*)|;
+	$command =~ m|^\s*(\S*/)?(\S*)|;
+
+	if ($Psh::debugging and
+		($Psh::debugging eq '1' or
+		 $Psh::debugging =~ /c/)) {
+		Psh::Util::print_debug_class('c',"\n");
+		Psh::Util::print_debug_class('c',"Completion: text=$text, line=$line, start=$start, starttext=$starttext, command=$command, first=$firstflag\n");
+	}
+
+
 	my $dir=$1||'';
 	my $base=$2||'';
-	my $cs = $Psh::PCompletion::COMPSPEC{$cmd = $dir . $base}
-	    || $Psh::PCompletion::COMPSPEC{$cmd = $base};
+	my $cmd;
 
-	# Do programmable completion if completion-spec is defined.
-	# This is done here to keep the compatibility with bash.
-	if (defined $cs) {
-		# remove prefix string if it is already prefixed.
-		$text =~ s/^\Q$cs->{prefix}//
-		    if (defined $cs->{prefix});
-		@tmp = Psh::PCompletion::pcomp_list($cs, $text, $line, $start, $cmd);
-		$attribs->{$APPEND}=$ac;
-		return @tmp;
+	if ($Psh::Completion::modules{$cmd= $dir.$base} or
+		$Psh::Completion::modules{$cmd= $base}) {
+		start_module($cmd);
 	}
 
-	if ($startchar eq '~' && !($text=~/\//)) {
-		# after ~ try username completion
-		@tmp= cmpl_usernames($text);
-		$ac="/" if @tmp;
-	} elsif ($starttext =~ m/\$([\w:]+)\s*(->)?\s*{\s*['"]?$/) {
+	if ($Psh::PCompletion::LOADED) {
+		# Check completion-spec is defined or not.
+		my $cmd;
+		my $cs = $Psh::PCompletion::COMPSPEC{$cmd = $dir . $base}
+		  || $Psh::PCompletion::COMPSPEC{$cmd = $base};
+		my $universal=0;
+		unless (defined $cs) {
+			$cs= $Psh::PCompletion::COMPSPEC{'*'};
+			$cmd= $dir.$base;
+			$universal=1;
+		}
+
+		# Do programmable completion if completion-spec is defined.
+		# This is done here to keep the compatibility with bash.
+		if (defined $cs) {
+			# remove prefix string if it is already prefixed.
+			$text =~ s/^\Q$cs->{prefix}//
+			  if (defined $cs->{prefix});
+			@tmp = Psh::PCompletion::pcomp_list($cs, $text, $line, $start, $cmd);
+			if (!@tmp) {
+				if ($cs->{option} and $cs->{option} eq 'default') {
+				} elsif ($universal) {
+					# ignore both cases
+				} else {
+					return ();
+				}
+			} else {
+				$attribs->{$APPEND}=$Psh::Completion::ac;
+				return @tmp;
+			}
+		}
+	}
+
+	if ($starttext =~ m/\$([\w:]+)\s*(->)?\s*{\s*['"]?$/) {
 		# $foo{key, $foo->{key
 		@tmp= cmpl_hashkeys($text, $line, $start);
-		$ac = '}';
+		$Psh::Completion::ac = '}';
 	} elsif ($starttext =~ m/\$([\w:]+)\s*->\s*['"]?$/) {
 		# $foo->method
 		@tmp= cmpl_method($text, $line, $start);
-		$ac = ' ';
+		$Psh::Completion::ac = ' ';
 	} elsif ( $text =~ /^\$#|[\@\$%&]/) {
-	        # $foo, @foo, $#foo, %foo, &foo
+		# $foo, @foo, $#foo, %foo, &foo
 		@tmp= cmpl_symbol($text, $line, $start);
-		$ac = '';
+		$Psh::Completion::ac = '';
 	} elsif( $firstflag || $starttext =~ /[\|\`]\s*$/) {
 		# we have the first word in the line or a pipe sign/backtick in front
 		# of the current item, so we try to complete executables
-
+		
 		if ($pretext=~m/\//) {
 			@tmp = cmpl_filenames($pretext.$text,1)
 		} else {
@@ -461,21 +523,16 @@ sub completion
 			# Afterwards we add possible matches for perl barewords
 			push @tmp, cmpl_perl_function($text);
 		}
-#    	} elsif( !$firstflag && @netprograms &&
-#    			 grep { $_ eq $startword } @netprograms)
-#    	{
-#    		@tmp= cmpl_bookmarks($text,$pretext);
-  	} else {
+	} else {
 		@tmp = cmpl_filenames($pretext.$text);
 	}
 
-	if( grep { $_ eq $startword } Psh::Builtins::get_builtin_commands() ) {
-		my @tmp2= eval "Psh::Builtins::cmpl_$startword('$text','$pretext','$starttext','$line')";
-		if( !@tmp2 && $Psh::built_ins{$startword}) {
-			my $pkg= ucfirst($startword);
-			eval "use Psh::Builtins::$pkg";
-			@tmp2= eval 'Psh::Builtins::'.$pkg.'::cmpl_'."$startword('$text','$pretext','$starttext','$line')";
-		}
+	if (Psh::Strategy::active('built_in') and
+		grep { $_ eq $command } Psh::Support::Builtins::get_builtin_commands() ) {
+		my $pkg= ucfirst($command);
+		eval "require Psh::Builtins::$pkg";
+		Psh::Util::print_debug_class('e',"Error: $@") if $@;
+		my @tmp2= eval 'Psh::Builtins::'.$pkg.'::cmpl_'."$command('$text','$pretext','$starttext','$line')";
 		if( @tmp2 && $tmp2[0]) {
 			shift(@tmp2);
 			@tmp= @tmp2;
@@ -485,15 +542,41 @@ sub completion
 		}
 	}
 
-	$attribs->{$APPEND}=$ac;
+	$attribs->{$APPEND}=$Psh::Completion::ac;
+
+	if ($cut) {
+		@tmp= map { substr($_, $cut)} @tmp;
+	}
 	return @tmp;
 }
 
-sub perl_symbol_display_match_list {
+sub display_match_list {
     my($matches, $num_matches, $max_length) = @_;
-    map { $_ =~ s/^((\$#|[\@\$%&])?).*::(.+)/$3/; }(@{$matches});
-    $Psh::term->display_match_list($matches);
-    $Psh::term->forced_update_display;
+	my @matches= @$matches; # make a copy, otherwise there's memory managment trouble
+	shift @matches;
+
+    map { $_ =~ s/^((\$#|[\@\$%&])?).*::(.+)/$3/; }(@matches);
+	my $col='01;34';
+	if ($ENV{LS_COLORS}) {
+		my @tmp= split /:/, $ENV{LS_COLORS};
+		foreach (@tmp) {
+			if (substr($_,0,3) eq 'di=') {
+				$col= substr($_,3);
+				last;
+			}
+		}
+	}
+	map { $_ =~ s/^([^\/]+)\/$/\001\e[${col}m\002$1\001\e[00m\002\//; } (@matches);
+	print STDOUT "\n";
+	Psh::Util::print_list(\@matches,$max_length);
+#	eval {
+#		local $^W=0;
+#		$Psh::term->display_match_list($matches);
+#	};
+    eval {
+		local $^W=0;
+		$Psh::term->forced_update_display if defined $Psh::term;
+	};
 }
 
 1;
@@ -519,7 +602,3 @@ Hiroo Hayashi, hiroo.hayashi@computer.org
 
 
 =cut
-
-# Local Variables:
-# cperl-indent-level:8
-# End:

@@ -27,29 +27,31 @@ sub bi_rename
 	$op= Psh::Parser::unquote($op);
 	@words = Psh::Parser::glob_expansion(\@words);
 	@words = map { Psh::Parser::unquote($_)} @words;
-	my $status=0;
-	for (@words) {
-		unless (-e) {
-			print STDERR "$Psh::bin: $_: $!\n";
-			$status= 1;
+	my $count=0;
+	foreach my $file (@words) {
+		unless (-e $file) {
+			print STDERR "$Psh::bin: $file: $!\n";
 			next;
 		}
-		my $was= $_;
+		my $was= $file;
+		$Psh::PerlEval::lastscalar=$was;
 		Psh::PerlEval::protected_eval($op);
-		if ($was ne $_) {
-			if ($inspect && -e) {
-				next unless Psh::Util::prompt("yn","remove $_?") eq 'y';
-			} elsif (-e $_) {
+		my $now= $Psh::PerlEval::lastscalar;
+		if ($was ne $now) {
+			if ($inspect && -e $now) {
+				next unless Psh::Util::prompt("yn","remove $now?") eq 'y';
+			} elsif (-e $now) {
 				print STDERR "$_ exists. $was not renamed\n";
 				next
 			}
-			unless (rename($was,$_)) {
-				print STDERR "$Psh::bin: can't rename $was to $_: $!\n";
-				$status= 1;
+			if (CORE::rename($was,$now)) {
+				$count++;
+			} else {
+				print STDERR "$Psh::bin: can't rename $was to $now: $!\n";
 			}
 		}
 	}
-	return $status;
+	return ($count>0,$count);
 }
 
 
